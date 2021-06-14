@@ -1,0 +1,7 @@
+Host mila
+    User YOUR-USERNAME
+    Hostname login.server.mila.quebec
+    PreferredAuthentications publickey,keyboard-interactive
+    Port 2222
+    ServerAliveInterval 120
+    ServerAliveCountMax 5

@@ -1,0 +1,21 @@
+### GETTING SSH SET UP ###
+
+1) Modify the file `config` (in this directory) by replacing YOUR-USERNAME with your Mila login name. This is simply the part before the @mila.quebec in your Mila email address.
+
+2) Check to see if you already have an SSH config file on your computer (it's the file ~/.ssh/config).
+
+3a) If you do, copy the information in the `config` file (in this directory) to the bottom of your existing SSH config file.
+
+3b) If you don't, copy the `config` file into the directory ~/.ssh
+
+4) Run the command `ssh mila` in a terminal. It should ask you to enter a password, which is the same as the password for your Mila email address.
+
+5) If everything goes well, then you should be inside the Mila network. Congrats! You can end the SSH session and go back to your own computer at any time by typing `exit` on the command line.
+
+6) If you don't want to have to enter your password everytime, then follow these (totally optional) steps:
+
+6a) On your own computer, run the command `ssh-keygen -t ed25519 -C "YOUR-EMAIL-ADDRESS"`, where YOUR-EMAIL-ADDRESS can be any preferred email address (not necessarily your Mila one). You'll be asked for a password, and feel free to leave that blank (just press Enter).
+
+6b) Run the command `ssh-copy-id mila` and enter your Mila login password.
+
+6c) Try logging into the Mila system with the command `ssh mila`. You should now be connected, without having to enter your password.
