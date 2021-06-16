@@ -19,3 +19,33 @@
 6b) Run the command `ssh-copy-id mila` and enter your Mila login password.
 
 6c) Try logging into the Mila system with the command `ssh mila`. You should now be connected, without having to enter your password.
+
+
+### SETTING UP SOFTWARE DEPENDENCIES ON THE MILA CLUSTER ###
+
+[Note: Much of this is described in https://docs.mila.quebec/software/python.html and https://docs.mila.quebec/slurm/index.html]
+
+7a) To ensure you always have access to Python, add the line `module load python/3.7` into the file `.bashrc` in your home directory (if it isn't already there).
+
+7b) Run the command `source $HOME/.bashrc` to ensure Python is loaded.
+
+8a) Create a new virtual environment by running the command `virtualenv $HOME/.Env` (you can use any name you want in place of ".Env", although having the name start with "." will minimize clutter in your home directory).
+
+8b) Run the command `source $HOME/.Env/bin/activate` to activate your environment. You should see your command line prompt expand to include the prefix "(.Env)". You can deactivate this environment at any time by running the command `deactivate`.
+
+9a) From your home directory, clone a copy of the Continuous-uMPS repo with the command `git clone https://github.com/jemisjoky/Continuous-uMPS.git`.
+
+9b) Assuming your ".Env" virtual environment is still activated, go into the Continuous-uMPS directory and run the command `pip install -r requirements.txt`. This should install all of the necessary packages for running the code.
+
+[Note: It's kinda wasteful to install a whole local copy of Pytorch, since there are already Mila-wide shared versions available. The newest version of Pytorch on the Mila network isn't working correctly though, so for now just use your own local install.]
+
+10a) Go back to your home directory and clone a copy of the TorchMPS repo with the command `git clone https://github.com/jemisjoky/TorchMPS.git`.
+
+10b) Go into the TorchMPS directory and run the command `make install`. This shouldn't install any new external packages (those were taken care of in step 9b), but will make TorchMPS accessible to your training script.
+
+
+### RUNNING CODE THROUGH SLURM ###
+
+11) Go back to the Continuous-uMPS directory and run the command `sbatch slurm_example`. If everything goes right, the job will run and you should see a file appear in your directory called `job_output.txt`. This just contains the output from running the `try_this_first.py` test script on the Mila cluster, but by modifying `slurm_example` you can have it run more interesting scripts.
+
+12) Let me know if you run into any issues, or have any questions that pop up. Good luck :)
