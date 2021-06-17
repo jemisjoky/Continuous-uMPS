@@ -98,11 +98,8 @@ def compute(epochs, bond_dim, batch_size, lr=1e-3, test_loss_hist=False):
             batchData=data[j*batch_size:min((j+1)*batch_size, len(data))]            
             batchData=batchData.transpose(0,1)
 
-            try:
-                loss = my_mps.loss(batchData)
-            except AssertionError:
-                breakpoint()
-                my_mps.loss(batchData)
+            loss = my_mps.loss(batchData)
+            # print(f"Batch {j}: {loss:.2f}")
 
             loss.backward()
             optimizer.step()
