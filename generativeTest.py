@@ -9,7 +9,7 @@ import numpy as np
 # After running `make install` in the torchmps folder, this should work
 from torchmps import ProbMPS
 
-matplotlib.use("pdf")
+#matplotlib.use("pdf")
 
 
 
@@ -52,16 +52,16 @@ def compute(epochs, bond_dim, batch_size, test_loss_hist=False):
 	loss_hist=[]
 
 	my_mps = ProbMPS(sequence_len, input_dim, bond_dim, complex_params)
-	optimizer = torch.optim.Adam(my_mps.parameters(), lr=0.00001)
+	optimizer = torch.optim.Adam(my_mps.parameters(), lr=0.1)
 
 
-	data=processMnist(trainX)[:]
+	data=processMnist(trainX)[:10]
 
 	totalB=int(len(data)/batch_size)
 	print(totalB)
 	#data=data.transpose(0, 1)
 
-	test_data=processMnist(testX)[:]
+	test_data=processMnist(testX)[:10]
 
 	def testLoop(dataTest):
 
@@ -99,50 +99,24 @@ def compute(epochs, bond_dim, batch_size, test_loss_hist=False):
 
 	testLoss=testLoop(test_data)
 
-	print("epochs: "+str(epochs)+" batch size: "+str(batch_size)+" bond dim: "+str(bond_dim)+" --> loss: "+str(testLoss.item())+"\n")
+	print("epochs: "+str(epochs)+" batch size: "+str(batch_size)+" bond dim: "+str(bond_dim)+" --> loss: "+str(testLoss)+"\n")
 
 	return my_mps
 
-#tn=compute(1, 10, 100)
-#n=4, m=6
-firstCore=np.random.random([2,1, 6])
-midCore=np.random.random([2, 6, 6])
-endCore=np.random.random([2, 6, 1])
-coreList=[firstCore, midCore, endCore]
-
-
-allVals=[]
-for i in range(2):
-	for j in range(2):
-		for k in range(2):
-			allVals.append([[i, 1-i], [j, 1-j], [k, 1-k]])
-
-
-#A=np.random.random([3, 4])
-#Q, R=np.linalg.qr(A)
-#print(R)
-
-#print(Q @ Q.transpose())
-
-#print(Q.shape)
-
-#print(np.einsum("ji, ki -> jk", Q, Q))
 
 def contractTrain(cores, values):
 	
 	res=cores[0]
 	val=values[0]
-
 	res=np.einsum("ijk, i->jk", res, val)
 	
 	for i in range(1, len(cores)):
+
 		res=np.einsum("ik, jkm -> jim", res, cores[i])
 		res=np.einsum("ijk, i->jk", res, values[i])
-	#print(res.shape)
-	#print(res)
+
 	return res
 
-#contractTrain(coreList, allVals[0])
 
 def contractSquareNorm(cores):
 
@@ -150,25 +124,12 @@ def contractSquareNorm(cores):
 	for i in range(1, len(cores)):
 
 		temp=np.einsum("ijk, imn->jmkn", cores[i], cores[i])
-
 		res=np.einsum("klij, ijmn->klmn", res, temp)
-		print(res)
-	#print(res.shape)
+
 	return res
 
-#A=np.zeros([1, 1,1,1])
-#for vals in allVals:
-#	temp=contractTrain(coreList, vals)
-#	A+=np.einsum("ij, kl-> ijkl",temp, temp)
-
-#contractSquareNorm(coreList)
 
 def get_QR_transform(cores):
-
-	#first=cores[0]
-	#temp=first.reshape(-1, first.shape[-1])
-	#print(temp.shape)
-	#Q,R=np.linalg.qr(temp)
 
 	newCores=[]
 	R=np.identity(cores[0].shape[1])
@@ -176,15 +137,9 @@ def get_QR_transform(cores):
 	for i in range(0, len(cores)-1):
 
 		A=cores[i]
-		print(R.shape)
-		print(A.shape)
 		newA=np.einsum("ij, kjl->kil", R, A)
-		print(newA.shape)
 		temp=newA.reshape(-1, newA.shape[-1])
 		Q,R=np.linalg.qr(temp)
-		print(Q.shape)
-		print(R.shape)
-		print(i)
 		Q=Q.reshape(newA.shape[0], newA.shape[1], R.shape[0])
 		newCores.append(Q)
 
@@ -193,20 +148,106 @@ def get_QR_transform(cores):
 	newCores.append(newA)
 	return newCores
 
-def margin_leftQR(cores):
+def square_norm_leftQR(cores):
 	A=cores[-1]
 	res=np.einsum("ijk,ijm->km", A, A)
 	return res
 
-#newCores=get_QR_transform(coreList)
-#print(contractSquareNorm(coreList))
-#print(contractSquareNorm(newCores))
-#print(margin_leftQR(newCores))
 
-my_mps = ProbMPS(16, 2, 5, False)
+def get_quasi_prob(cores, values):
+	use_cores=cores[-len(values):]
+	temp=contractTrain(use_cores, values)
+	temp=np.einsum("ij, ik->jk", temp, temp)
+	return temp
 
 
-cores=my_mps.core_tensors
-edge=my_mps.edge_vecs
-print(cores[0].shape)
-print(edge)
+def margin(cores, given_val):
+
+	dim=cores[0].shape[0]
+	#use_cores=cores[-len(given_val)-1:]
+	probs=np.zeros(dim)
+
+	possible_values=[]
+
+	for i in range(dim):
+		curr_val=np.zeros(dim)
+		curr_val[i]=1
+		vals=[curr_val]
+		vals+=given_val
+		probs[i]=get_quasi_prob(cores, vals)
+		possible_values.append(curr_val)
+
+	return probs, possible_values
+
+
+def roll(bias):
+
+	guess=np.random.uniform()
+	S=0
+	for i, val in enumerate(bias):
+		if guess<S+val:
+			return i
+		else:
+			S+=val
+
+
+def sample(cores, item):
+
+	given_vals=[]
+
+	if item==1:
+		Z=square_norm_leftQR(cores).item()
+		probs, vals=margin(cores, given_vals)
+		res=roll(probs/Z)
+		return probs[res], [vals[res]]
+
+	else:
+
+		p_prec, vals_prec=sample(cores, item-1)
+		probs, vals=margin(cores, vals_prec)
+		res=roll(probs/p_prec)
+		given_vals=[vals[res]]
+		given_vals+=vals_prec
+		return probs[res], given_vals
+
+
+def seq_to_array(seq, w, h):
+	seq=np.array(seq)
+	seq=seq[:, 0]	
+	return seq.reshape(w, h)
+
+
+
+#epochs, bond_dim, batch_size
+bond_dim=10
+my_mps = compute(10, bond_dim, 1)
+cores=[]
+for i in range(len(my_mps.core_tensors)):
+	cores.append(my_mps.core_tensors[i].detach().numpy())
+edge=my_mps.edge_vecs.detach().numpy()
+
+firstCore=np.einsum("ijk, j->ik", cores[0], edge[0])
+firstCore=firstCore.reshape(2, 1, bond_dim)
+cores[0]=firstCore
+
+endCore=np.einsum("ijk, j->ik", cores[-1], edge[1])
+endCore=endCore.reshape(2, bond_dim, 1)
+cores[-1]=endCore
+
+
+trans_cores=get_QR_transform(cores)
+Z=square_norm_leftQR(trans_cores).item()
+
+for i in range(10):
+	p, vals=sample(trans_cores, 196)
+	print(p/Z)
+	im=seq_to_array(vals, 14, 14)
+
+	plt.imshow(im)
+	plt.show()
+
+
+
+
+
+
