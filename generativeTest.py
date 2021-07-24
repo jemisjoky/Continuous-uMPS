@@ -19,8 +19,6 @@ def loadMnist():
 	mnist_testset = datasets.MNIST(root='../../mnist', train=False, download=False, transform=transform.ToTensor())
 	return mnist_trainset.train_data, mnist_trainset.train_labels, mnist_testset.test_data, mnist_testset.test_labels
 
-trainX,trainY, testX, testY=loadMnist()
-
 
 def processMnist(x, pool=True):
 
@@ -37,31 +35,61 @@ def processMnist(x, pool=True):
 
 	return x
 
-print(testX.shape)
 
-print(processMnist(testX).shape)
+def roll(bias):
 
-def compute(epochs, bond_dim, batch_size, test_loss_hist=False):
+	guess=np.random.uniform()
+	S=0
+	for i, val in enumerate(bias):
+		if guess<S+val:
+			return i
+		else:
+			S+=val
+
+
+def toyData(N):
+
+	data=torch.zeros([N, 4, 4])
+
+	for i in range(N):
+
+		quarter=((np.random.random([2, 2])>0.5))
+		bias=[0.333, 0.667]
+		l=roll(bias)
+		h=roll(bias)
+		data[i, l*2:(l+1)*2, h*2:(h+1)*2]=torch.tensor(quarter)
+		
+	return data.long()
+
+def compute(trainX, testX, epochs, bond_dim, batch_size, seq_len, hist=False):
+
+	lr=0.001
+
+	order = np.array(range(10))
+	np.random.shuffle(order)
+	trainX[np.array(range(10))] = trainX[order]
+
 	#bond_dim = 10
 	input_dim = 2
 	#batch_size = 100
-	sequence_len = 196
+	sequence_len = seq_len
 	complex_params = False
 
 	#epochs=1
-	loss_hist=[]
+	test_loss_hist=[]
+	train_loss_hist=[]
 
 	my_mps = ProbMPS(sequence_len, input_dim, bond_dim, complex_params)
-	optimizer = torch.optim.Adam(my_mps.parameters(), lr=0.1)
+	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr)
 
 
-	data=processMnist(trainX)[:10]
+	data=trainX
 
 	totalB=int(len(data)/batch_size)
 	print(totalB)
 	#data=data.transpose(0, 1)
 
-	test_data=processMnist(testX)[:10]
+	test_data=testX
 
 	def testLoop(dataTest):
 
@@ -77,14 +105,22 @@ def compute(epochs, bond_dim, batch_size, test_loss_hist=False):
 
 		return testLoss.item()
 
-
+	prevLoss=-np.log(len(data))
 
 	for e in range(epochs):
 
-		if test_loss_hist:
-			loss_hist.append(testLoop(test_data))
+		if hist:
+			test_loss_hist.append(testLoop(test_data))
+			train_loss_hist.append(testLoop(data))
 
 		print(e)
+
+		#adapatation of the learning rate
+		if e>5:
+			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
+
+		if e>10:
+			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/100)			
 
 		for j in range(totalB):
 
@@ -99,9 +135,13 @@ def compute(epochs, bond_dim, batch_size, test_loss_hist=False):
 
 	testLoss=testLoop(test_data)
 
+	if hist:
+		test_loss_hist.append(testLoop(test_data))
+		train_loss_hist.append(testLoop(data))
+
 	print("epochs: "+str(epochs)+" batch size: "+str(batch_size)+" bond dim: "+str(bond_dim)+" --> loss: "+str(testLoss)+"\n")
 
-	return my_mps
+	return my_mps, test_loss_hist, train_loss_hist
 
 
 def contractTrain(cores, values):
@@ -180,17 +220,6 @@ def margin(cores, given_val):
 	return probs, possible_values
 
 
-def roll(bias):
-
-	guess=np.random.uniform()
-	S=0
-	for i, val in enumerate(bias):
-		if guess<S+val:
-			return i
-		else:
-			S+=val
-
-
 def sample(cores, item):
 
 	given_vals=[]
@@ -218,36 +247,62 @@ def seq_to_array(seq, w, h):
 
 
 
-#epochs, bond_dim, batch_size
-bond_dim=10
-my_mps = compute(10, bond_dim, 1)
-cores=[]
-for i in range(len(my_mps.core_tensors)):
-	cores.append(my_mps.core_tensors[i].detach().numpy())
-edge=my_mps.edge_vecs.detach().numpy()
+#epochs, bond_dim, batch_size, seq_len
+def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 
-firstCore=np.einsum("ijk, j->ik", cores[0], edge[0])
-firstCore=firstCore.reshape(2, 1, bond_dim)
-cores[0]=firstCore
+	my_mps, t1, t2 = compute(trainX, testX, epochs, bond_dim, 10, seq_len)
+	cores=[]
 
-endCore=np.einsum("ijk, j->ik", cores[-1], edge[1])
-endCore=endCore.reshape(2, bond_dim, 1)
-cores[-1]=endCore
+	for i in range(len(my_mps.core_tensors)):
+		cores.append(my_mps.core_tensors[i].detach().numpy())
+	
+	edge=my_mps.edge_vecs.detach().numpy()
 
+	firstCore=np.einsum("ijk, j->ik", cores[0], edge[0])
+	firstCore=firstCore.reshape(2, 1, bond_dim)
+	cores[0]=firstCore
 
-trans_cores=get_QR_transform(cores)
-Z=square_norm_leftQR(trans_cores).item()
-
-for i in range(10):
-	p, vals=sample(trans_cores, 196)
-	print(p/Z)
-	im=seq_to_array(vals, 14, 14)
-
-	plt.imshow(im)
-	plt.show()
+	endCore=np.einsum("ijk, j->ik", cores[-1], edge[1])
+	endCore=endCore.reshape(2, bond_dim, 1)
+	cores[-1]=endCore
 
 
+	trans_cores=get_QR_transform(cores)
+	Z=square_norm_leftQR(trans_cores).item()
+
+	for i in range(10):
+		p, vals=sample(trans_cores, seq_len)
+		print(p/Z)
+		im=seq_to_array(vals, sizes, sizes)
+
+		plt.imshow(im)
+		plt.show()
+
+
+#test()
+
+def plot(trainX, testX, epochs, bond_dim, seq_len):
+	print(trainX.shape)
+
+	my_mps, test_hist, train_hist = compute(trainX, testX, epochs, bond_dim, 10, seq_len, hist=True)
+	x=np.arange(epochs+1)
+	plt.plot(x, test_hist, "m")
+	plt.plot(x, train_hist, "k")
+	plt.savefig("graph1")
 
 
 
 
+#N=1000
+#n=100
+#trainX=toyData(N).reshape(N, 16)
+#testX=toyData(n).reshape(n, 16)
+trainX,trainY, testX, testY=loadMnist()
+trainX=processMnist(trainX)
+#print(trainX[0])
+#testX=processMnist(testX)
+
+bond_dim=20; seq_len=len(trainX[0]); size=int(np.sqrt(len(trainX[0]))); epochs=20;
+
+plot(trainX[:10], testX[:10], epochs, bond_dim, seq_len)
+#test(trainX, testX, epochs, bond_dim, seq_len, size)
