@@ -11,6 +11,8 @@ from torchmps import ProbMPS
 
 #matplotlib.use("pdf")
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 
 def loadMnist():
@@ -80,6 +82,7 @@ def compute(trainX, testX, epochs, bond_dim, batch_size, seq_len, hist=False):
 	train_loss_hist=[]
 
 	my_mps = ProbMPS(sequence_len, input_dim, bond_dim, complex_params)
+	my_mps.to(device)
 	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr)
 
 
@@ -282,7 +285,7 @@ def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 #test()
 
 def plot(trainX, testX, epochs, bond_dim, seq_len):
-	print(trainX.shape)
+	#print(trainX.shape)
 
 	my_mps, test_hist, train_hist = compute(trainX, testX, epochs, bond_dim, 10, seq_len, hist=True)
 	x=np.arange(epochs+1)
@@ -300,7 +303,7 @@ def plot(trainX, testX, epochs, bond_dim, seq_len):
 trainX,trainY, testX, testY=loadMnist()
 trainX=processMnist(trainX)
 #print(trainX[0])
-#testX=processMnist(testX)
+testX=processMnist(testX)
 
 bond_dim=20; seq_len=len(trainX[0]); size=int(np.sqrt(len(trainX[0]))); epochs=20;
 
