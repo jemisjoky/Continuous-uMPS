@@ -1,3 +1,4 @@
+from comet_ml import Experiment
 import torch
 import torch.nn as nn
 import torchvision
@@ -13,6 +14,8 @@ from torchmps import ProbMPS
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+experiment = Experiment("rpXxpS1xca85qSrX2xFjfgFsE",project_name="MPS_Mnist_1")
 
 
 def loadMnist():
@@ -62,8 +65,8 @@ def toyData(N):
 		data[i, l*2:(l+1)*2, h*2:(h+1)*2]=torch.tensor(quarter)
 		
 	return data.long()
-
-def compute(trainX, testX, epochs, bond_dim, batch_size, seq_len, hist=False):
+#(trainX, testX, epochs, seq_len, size, bond_dim, batch)
+def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 
 	lr=0.001
 
@@ -113,21 +116,27 @@ def compute(trainX, testX, epochs, bond_dim, batch_size, seq_len, hist=False):
 	for e in range(epochs):
 
 		if hist:
-			test_loss_hist.append(testLoop(test_data))
-			train_loss_hist.append(testLoop(data))
+			testl=testLoop(test_data)
+			trainl=testLoop(data)
+			test_loss_hist.append(testl)
+			train_loss_hist.append(trainl)
+			with experiment.train():
+				experiment.log_metric("logLikelihood", trainl, step=e)
+			with experiment.test():
+				experiment.log_metric("logLikelihood", testl, step=e)
 
 		print(e)
 
 		#adapatation of the learning rate
-		if e>5:
-			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
+		#if e>5:
+		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
 		if e>10:
-			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/100)			
+			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)			
 
 		for j in range(totalB):
 
-			print("       ", j)
+			#print("       ", j)
 			batchData=data[j*batch_size:min((j+1)*batch_size, len(data))]
 			
 			batchData=batchData.transpose(0,1)
@@ -283,14 +292,14 @@ def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 
 
 #test()
-
-def plot(trainX, testX, epochs, bond_dim, seq_len):
+#(trainX, testX, epochs, seq_len, size, bond_dim, batch)
+def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size):
 	#print(trainX.shape)
 
-	my_mps, test_hist, train_hist = compute(trainX, testX, epochs, bond_dim, 10, seq_len, hist=True)
+	my_mps, test_hist, train_hist = compute(trainX, testX, epochs,seq_len, bond_dim, batch_size, hist=True)
 	x=np.arange(epochs+1)
 	plt.plot(x, test_hist, "m")
-	plt.plot(x, train_hist, "k")
+	plt.plot(x, train_hist, "b")
 	plt.savefig("graph1")
 
 
@@ -307,5 +316,17 @@ testX=processMnist(testX)
 
 bond_dim=20; seq_len=len(trainX[0]); size=int(np.sqrt(len(trainX[0]))); epochs=20;
 
-plot(trainX[:10], testX[:10], epochs, bond_dim, seq_len)
-#test(trainX, testX, epochs, bond_dim, seq_len, size)
+
+hyper_params = {
+	"bond_dim": 20,
+    "sequence_length": len(trainX[0]),
+    "input_dim": 2,
+    "batch_size": 10,
+    "epochs": 20,
+    "lr_init": 0.01
+}
+
+experiment.log_parameters(hyper_params)
+
+plot(trainX[:10], testX[:10], hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
+#(trainX, testX, epochs, seq_len, size, bond_dim, batch)
