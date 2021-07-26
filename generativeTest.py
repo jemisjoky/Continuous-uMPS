@@ -140,22 +140,25 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 			batchData=batchData.transpose(0,1)
 
 			loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
-
+			print(loss)
 			if hist==True:
-				epochLoss+=loss.detach().item()*len(batchData)
+				epochLoss+=loss.detach().item()*batchData.shape[1]
 
 			loss.backward()
 			optimizer.step()
 
+		print(epochLoss)
+
 		with experiment.train():
 			experiment.log_metric("logLikelihood", epochLoss/len(data), step=e)
+			train_loss_hist.append(epochLoss/len(data))
 
 
 #	if hist:
 #		test_loss_hist.append(testLoop(test_data))
 #		train_loss_hist.append(testLoop(data))
 
-	print("epochs: "+str(epochs)+" batch size: "+str(batch_size)+" bond dim: "+str(bond_dim)+" --> loss: "+str(testLoss)+"\n")
+	#print("epochs: "+str(epochs)+" batch size: "+str(batch_size)+" bond dim: "+str(bond_dim)+" --> loss: "+str(testLoss)+"\n")
 
 	return my_mps, test_loss_hist, train_loss_hist
 
@@ -301,7 +304,7 @@ def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size):
 	#print(trainX.shape)
 
 	my_mps, test_hist, train_hist = compute(trainX, testX, epochs,seq_len, bond_dim, batch_size, hist=True)
-	x=np.arange(epochs+1)
+	x=np.arange(epochs)
 	plt.plot(x, test_hist, "m")
 	plt.plot(x, train_hist, "b")
 	plt.savefig("graph1")
@@ -332,5 +335,5 @@ hyper_params = {
 
 experiment.log_parameters(hyper_params)
 
-plot(trainX, testX, hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
+plot(trainX[:10], testX[:10], hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
