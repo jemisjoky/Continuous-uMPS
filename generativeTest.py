@@ -13,15 +13,15 @@ from torchmps import ProbMPS
 #matplotlib.use("pdf")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+#torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 experiment = Experiment("rpXxpS1xca85qSrX2xFjfgFsE",project_name="MPS_Mnist_1")
 
 
 def loadMnist():
 
-	mnist_trainset = datasets.MNIST(root='../../mnist', train=True, download=False, transform=transform.ToTensor())
-	mnist_testset = datasets.MNIST(root='../../mnist', train=False, download=False, transform=transform.ToTensor())
+	mnist_trainset = datasets.MNIST(root='../mnist', train=True, download=False, transform=transform.ToTensor())
+	mnist_testset = datasets.MNIST(root='../mnist', train=False, download=False, transform=transform.ToTensor())
 	return mnist_trainset.train_data, mnist_trainset.train_labels, mnist_testset.test_data, mnist_testset.test_labels
 
 
@@ -100,16 +100,16 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 	def testLoop(dataTest):
 
 		totalBT=int(len(dataTest)/batch_size)
-		testLoss=torch.tensor(0.0)
+		testLoss=0
 		for j in range(totalBT):
 
 			print("test       ", j)
 			batchTest=dataTest[j*batch_size:min((j+1)*batch_size, len(dataTest))]
-			testLoss+=my_mps.loss(batchTest.transpose(0, 1))*len(batchTest)
+			testLoss+=my_mps.loss(batchTest.transpose(0, 1)).detach().item()*len(batchTest)
 
 		testLoss=testLoss/len(dataTest)
 
-		return testLoss.item()
+		return testLoss
 
 	prevLoss=-np.log(len(data))
 
@@ -117,11 +117,7 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 
 		if hist:
 			testl=testLoop(test_data)
-			trainl=testLoop(data)
 			test_loss_hist.append(testl)
-			train_loss_hist.append(trainl)
-			with experiment.train():
-				experiment.log_metric("logLikelihood", trainl, step=e)
 			with experiment.test():
 				experiment.log_metric("logLikelihood", testl, step=e)
 
@@ -131,8 +127,10 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 		#if e>5:
 		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
-		if e>10:
+		if e==10:
 			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)			
+
+		epochLoss=0
 
 		for j in range(totalB):
 
@@ -140,16 +138,22 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 			batchData=data[j*batch_size:min((j+1)*batch_size, len(data))]
 			
 			batchData=batchData.transpose(0,1)
-		# Verify that backprop works fine, and that gradients are populated
+
 			loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
+
+			if hist==True:
+				epochLoss+=loss.detach().item()*len(batchData)
+
 			loss.backward()
 			optimizer.step()
 
-	testLoss=testLoop(test_data)
+		with experiment.train():
+			experiment.log_metric("logLikelihood", epochLoss/len(data), step=e)
 
-	if hist:
-		test_loss_hist.append(testLoop(test_data))
-		train_loss_hist.append(testLoop(data))
+
+#	if hist:
+#		test_loss_hist.append(testLoop(test_data))
+#		train_loss_hist.append(testLoop(data))
 
 	print("epochs: "+str(epochs)+" batch size: "+str(batch_size)+" bond dim: "+str(bond_dim)+" --> loss: "+str(testLoss)+"\n")
 
@@ -318,7 +322,7 @@ bond_dim=20; seq_len=len(trainX[0]); size=int(np.sqrt(len(trainX[0]))); epochs=2
 
 
 hyper_params = {
-	"bond_dim": 20,
+	"bond_dim": 5,
     "sequence_length": len(trainX[0]),
     "input_dim": 2,
     "batch_size": 10,
@@ -328,5 +332,5 @@ hyper_params = {
 
 experiment.log_parameters(hyper_params)
 
-plot(trainX[:10], testX[:10], hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
+plot(trainX, testX, hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
