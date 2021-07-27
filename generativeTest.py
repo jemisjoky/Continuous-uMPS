@@ -103,7 +103,7 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 		testLoss=0
 		for j in range(totalBT):
 
-			print("test       ", j)
+			#print("test       ", j)
 			batchTest=dataTest[j*batch_size:min((j+1)*batch_size, len(dataTest))]
 			testLoss+=my_mps.loss(batchTest.transpose(0, 1)).detach().item()*len(batchTest)
 
@@ -117,7 +117,12 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 
 		if hist:
 			testl=testLoop(test_data)
+			trainl=testLoop(data)
 			test_loss_hist.append(testl)
+			train_loss_hist.append(trainl)
+
+			with experiment.train():
+				experiment.log_metric("logLikelihood", trainl, step=e)
 			with experiment.test():
 				experiment.log_metric("logLikelihood", testl, step=e)
 
@@ -127,10 +132,8 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 		#if e>5:
 		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
-		if e==10:
+		if e==5:
 			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)			
-
-		epochLoss=0
 
 		for j in range(totalB):
 
@@ -140,9 +143,6 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 			batchData=batchData.transpose(0,1)
 
 			loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
-			print(loss)
-			if hist==True:
-				epochLoss+=loss.detach().item()*batchData.shape[1]
 
 			loss.backward()
 			optimizer.step()
@@ -329,11 +329,11 @@ hyper_params = {
     "sequence_length": len(trainX[0]),
     "input_dim": 2,
     "batch_size": 10,
-    "epochs": 20,
+    "epochs": 10,
     "lr_init": 0.01
 }
 
 experiment.log_parameters(hyper_params)
 
-plot(trainX[:10], testX[:10], hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
+plot(trainX[:], testX[:], hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
