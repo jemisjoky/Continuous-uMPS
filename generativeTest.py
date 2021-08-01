@@ -25,20 +25,37 @@ def loadMnist():
 	return mnist_trainset.train_data, mnist_trainset.train_labels, mnist_testset.test_data, mnist_testset.test_labels
 
 
-def processMnist(x, pool=True):
+def processMnist(x, pool=True, discrete=True):
 
 	if pool==True:
 
 		avg=nn.AvgPool2d(2)
 		x=avg(x.float())
 
-	temp=x.numpy()
-	temp=np.where(temp>64, 1, 0)
-	x=torch.tensor(temp)
+
+	if discrete==True:
+		temp=x.numpy()
+		temp=np.where(temp>64, 1, 0)
+		x=torch.tensor(temp)
 
 	x=torch.flatten(x, start_dim=1)
 
 	return x
+
+def embeddingFunc(vect, s, d):
+	emb=np.cos(vect*np.pi/2)**(d-s)*np.sin(vect*np.pi/2)**(s-1)
+	#print(emb.shape, vect.shape)
+	return emb
+
+def embedding(data, d):
+
+	newEmbed=np.zeros([len(data),len(data[0]), d])
+	for s in range(d):
+		#print(newEmbed[:,:, s].shape)
+		newEmbed[:,:, s]=embeddingFunc(data, s+1, d)
+
+	return newEmbed
+
 
 
 def roll(bias):
@@ -66,7 +83,7 @@ def toyData(N):
 		
 	return data.long()
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
-def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
+def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist=False):
 
 	lr=0.001
 
@@ -105,7 +122,8 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 
 			#print("test       ", j)
 			batchTest=dataTest[j*batch_size:min((j+1)*batch_size, len(dataTest))]
-			testLoss+=my_mps.loss(batchTest.transpose(0, 1)).detach().item()*len(batchTest)
+			toLearn=torch.tensor(np.transpose(batchTest, [1, 0, 2]))
+			testLoss+=my_mps.loss(toLearn.float()).detach().item()*len(batchTest)
 
 		testLoss=testLoss/len(dataTest)
 
@@ -132,26 +150,19 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, hist=False):
 		#if e>5:
 		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
-		if e==5:
-			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)			
+		#if e==5:
+		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)			
 
 		for j in range(totalB):
 
 			#print("       ", j)
 			batchData=data[j*batch_size:min((j+1)*batch_size, len(data))]
-			
-			batchData=batchData.transpose(0,1)
+			batchData=torch.tensor(np.transpose(batchData, [1, 0, 2]))
 
-			loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
+			loss = my_mps.loss(batchData.float())  # <- Negative log likelihood loss
 
 			loss.backward()
 			optimizer.step()
-
-		print(epochLoss)
-
-		with experiment.train():
-			experiment.log_metric("logLikelihood", epochLoss/len(data), step=e)
-			train_loss_hist.append(epochLoss/len(data))
 
 
 #	if hist:
@@ -300,10 +311,10 @@ def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 
 #test()
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
-def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size):
+def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr):
 	#print(trainX.shape)
 
-	my_mps, test_hist, train_hist = compute(trainX, testX, epochs,seq_len, bond_dim, batch_size, hist=True)
+	my_mps, test_hist, train_hist = compute(trainX, testX, epochs,seq_len, bond_dim, batch_size, lr=lr, hist=True)
 	x=np.arange(epochs)
 	plt.plot(x, test_hist, "m")
 	plt.plot(x, train_hist, "b")
@@ -317,9 +328,25 @@ def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size):
 #trainX=toyData(N).reshape(N, 16)
 #testX=toyData(n).reshape(n, 16)
 trainX,trainY, testX, testY=loadMnist()
-trainX=processMnist(trainX)
+#trainX=processMnist(trainX, discrete=True)
 #print(trainX[0])
-testX=processMnist(testX)
+#testX=processMnist(testX, discrete=True)
+
+#trainX=embedding(trainX, 2)
+#testX=embedding(testX, 2)
+
+def getTrainTest(trainX, testX, pool=False, discrete=True, d=2):
+	trainX=processMnist(trainX, pool=pool, discrete=discrete)
+	testX=processMnist(testX, pool=pool, discrete=discrete)
+	
+	trainX=embedding(trainX, d)
+	testX=embedding(testX, d)
+	return trainX, testX
+
+trainX, testX=getTrainTest(trainX, testX, pool=True, discrete=True)
+
+print(trainX)
+
 
 bond_dim=20; seq_len=len(trainX[0]); size=int(np.sqrt(len(trainX[0]))); epochs=20;
 
@@ -330,10 +357,14 @@ hyper_params = {
     "input_dim": 2,
     "batch_size": 10,
     "epochs": 10,
-    "lr_init": 0.01
+    "lr_init": 0.0001
 }
 
 experiment.log_parameters(hyper_params)
 
-plot(trainX[:], testX[:], hyper_params["epochs"],hyper_params["sequence_length"],hyper_params["bond_dim"], hyper_params["batch_size"])
+#print(trainX[:1])
+#print(embedding(trainX[:1], 2))
+
+plot(trainX[:1000], testX[:1000], hyper_params["epochs"],hyper_params["sequence_length"],
+	hyper_params["bond_dim"], hyper_params["batch_size"], lr=hyper_params["lr_init"])
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
