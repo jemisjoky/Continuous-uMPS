@@ -85,12 +85,6 @@ def toyData(N):
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
 def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist=False):
 
-	lr=0.001
-
-	order = np.array(range(10))
-	np.random.shuffle(order)
-	trainX[np.array(range(10))] = trainX[order]
-
 	#bond_dim = 10
 	input_dim = 2
 	#batch_size = 100
@@ -133,6 +127,10 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist
 
 	for e in range(epochs):
 
+		order = np.array(range(len(trainX)))
+		np.random.shuffle(order)
+		trainX[np.array(range(len(trainX)))] = trainX[order]
+
 		if hist:
 			testl=testLoop(test_data)
 			trainl=testLoop(data)
@@ -150,8 +148,9 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist
 		#if e>5:
 		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
-		#if e==5:
-		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)			
+		if e%10==0:
+			reduction=2**(e/10)
+			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/reduction)			
 
 		for j in range(totalB):
 
@@ -345,19 +344,17 @@ def getTrainTest(trainX, testX, pool=False, discrete=True, d=2):
 
 trainX, testX=getTrainTest(trainX, testX, pool=True, discrete=True)
 
-print(trainX)
-
 
 bond_dim=20; seq_len=len(trainX[0]); size=int(np.sqrt(len(trainX[0]))); epochs=20;
 
 
 hyper_params = {
-	"bond_dim": 5,
+	"bond_dim": 2,
     "sequence_length": len(trainX[0]),
     "input_dim": 2,
-    "batch_size": 10,
-    "epochs": 10,
-    "lr_init": 0.0001
+    "batch_size": 2,
+    "epochs": 20,
+    "lr_init": 0.01
 }
 
 experiment.log_parameters(hyper_params)
@@ -365,6 +362,6 @@ experiment.log_parameters(hyper_params)
 #print(trainX[:1])
 #print(embedding(trainX[:1], 2))
 
-plot(trainX[:1000], testX[:1000], hyper_params["epochs"],hyper_params["sequence_length"],
+plot(trainX[:10], testX[:10], hyper_params["epochs"],hyper_params["sequence_length"],
 	hyper_params["bond_dim"], hyper_params["batch_size"], lr=hyper_params["lr_init"])
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
