@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 # After running `make install` in the torchmps folder, this should work
 from torchmps import ProbMPS
+from torchmps.embeddings import DataDomain
 
 #matplotlib.use("pdf")
 
@@ -32,15 +33,35 @@ def processMnist(x, pool=True, discrete=True):
 		avg=nn.AvgPool2d(2)
 		x=avg(x.float())
 
+	x=x/256
+
 
 	if discrete==True:
 		temp=x.numpy()
-		temp=np.where(temp>64, 1, 0)
+		temp=np.where(temp>0.2, 1, 0)
 		x=torch.tensor(temp)
 
 	x=torch.flatten(x, start_dim=1)
 
 	return x
+
+def discreteEmbedding(input):
+	input=input.cpu()
+	d1=torch.tensor(np.ones(input.shape)*(input.numpy()>0.2))
+	d2=torch.tensor(np.ones(input.shape)*(input.numpy()<0.2))
+	ret=torch.stack([d1, d2], dim=-1)
+	return ret.float()
+
+discreteDomain=DataDomain(True, 1, 0)
+
+def sincosEmbedding(input):
+	input=input.cpu()
+	d1=np.cos(input*np.pi/2)
+	d2=np.sin(input*np.pi/2)
+	ret=torch.stack([d1, d2], dim=-1)
+	return ret.float()
+
+sincosDomain = DataDomain(True, 1, 0)
 
 def embeddingFunc(vect, s, d):
 	emb=np.cos(vect*np.pi/2)**(d-s)*np.sin(vect*np.pi/2)**(s-1)
@@ -52,7 +73,7 @@ def embedding(data, d):
 	newEmbed=np.zeros([len(data),len(data[0]), d])
 	for s in range(d):
 		#print(newEmbed[:,:, s].shape)
-		newEmbed[:,:, s]=embeddingFunc(data, s+1, d)
+		newEmbed[:,:, s]=embeddingFunc(data.cpu(), s+1, d)
 
 	return newEmbed
 
@@ -83,7 +104,7 @@ def toyData(N):
 		
 	return data.long()
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
-def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist=False):
+def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, embDomain, lr=0.001, hist=False):
 
 	#bond_dim = 10
 	input_dim = 2
@@ -95,9 +116,9 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist
 	test_loss_hist=[]
 	train_loss_hist=[]
 
-	my_mps = ProbMPS(sequence_len, input_dim, bond_dim, complex_params)
+	my_mps = ProbMPS(sequence_len, input_dim, bond_dim, complex_params, embed_fun=embedding, domain=embDomain)
 	my_mps.to(device)
-	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr)
+	optimizer = torch.optim.SGD(my_mps.parameters(), lr=lr)
 
 
 	data=trainX
@@ -116,7 +137,7 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist
 
 			#print("test       ", j)
 			batchTest=dataTest[j*batch_size:min((j+1)*batch_size, len(dataTest))]
-			toLearn=torch.tensor(np.transpose(batchTest, [1, 0, 2]))
+			toLearn=batchTest.transpose(1, 0)
 			testLoss+=my_mps.loss(toLearn.float()).detach().item()*len(batchTest)
 
 		testLoss=testLoss/len(dataTest)
@@ -148,15 +169,15 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr=0.001, hist
 		#if e>5:
 		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
-		if e%10==0:
-			reduction=2**(e/10)
-			optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/reduction)			
+		if e%5==0:
+			reduction=1.61**(e/5)
+			optimizer = torch.optim.SGD(my_mps.parameters(), lr=lr/reduction)			
 
 		for j in range(totalB):
 
 			#print("       ", j)
 			batchData=data[j*batch_size:min((j+1)*batch_size, len(data))]
-			batchData=torch.tensor(np.transpose(batchData, [1, 0, 2]))
+			batchData=batchData.transpose(1, 0)
 
 			loss = my_mps.loss(batchData.float())  # <- Negative log likelihood loss
 
@@ -310,10 +331,10 @@ def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 
 #test()
 #(trainX, testX, epochs, seq_len, size, bond_dim, batch)
-def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr):
+def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, embDomain, lr):
 	#print(trainX.shape)
 
-	my_mps, test_hist, train_hist = compute(trainX, testX, epochs,seq_len, bond_dim, batch_size, lr=lr, hist=True)
+	my_mps, test_hist, train_hist = compute(trainX, testX, epochs,seq_len, bond_dim, batch_size, embedding, embDomain, lr=lr, hist=True)
 	x=np.arange(epochs)
 	plt.plot(x, test_hist, "m")
 	plt.plot(x, train_hist, "b")
@@ -327,41 +348,28 @@ def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size, lr):
 #trainX=toyData(N).reshape(N, 16)
 #testX=toyData(n).reshape(n, 16)
 trainX,trainY, testX, testY=loadMnist()
-#trainX=processMnist(trainX, discrete=True)
-#print(trainX[0])
-#testX=processMnist(testX, discrete=True)
 
-#trainX=embedding(trainX, 2)
-#testX=embedding(testX, 2)
 
 def getTrainTest(trainX, testX, pool=False, discrete=True, d=2):
 	trainX=processMnist(trainX, pool=pool, discrete=discrete)
 	testX=processMnist(testX, pool=pool, discrete=discrete)
-	
-	trainX=embedding(trainX, d)
-	testX=embedding(testX, d)
 	return trainX, testX
 
-trainX, testX=getTrainTest(trainX, testX, pool=True, discrete=True)
+trainX, testX=getTrainTest(trainX, testX, pool=True, discrete=False)
 
-
-bond_dim=20; seq_len=len(trainX[0]); size=int(np.sqrt(len(trainX[0]))); epochs=20;
-
+#print(discreteEmbedding(trainX[0]))
 
 hyper_params = {
 	"bond_dim": 2,
     "sequence_length": len(trainX[0]),
     "input_dim": 2,
-    "batch_size": 2,
-    "epochs": 20,
-    "lr_init": 0.01
+    "batch_size": 1,
+    "epochs": 10,
+    "lr_init": 0.001
 }
 
 experiment.log_parameters(hyper_params)
 
-#print(trainX[:1])
-#print(embedding(trainX[:1], 2))
 
 plot(trainX[:10], testX[:10], hyper_params["epochs"],hyper_params["sequence_length"],
-	hyper_params["bond_dim"], hyper_params["batch_size"], lr=hyper_params["lr_init"])
-#(trainX, testX, epochs, seq_len, size, bond_dim, batch)
+	hyper_params["bond_dim"], hyper_params["batch_size"], discreteEmbedding, discreteDomain, lr=hyper_params["lr_init"])
