@@ -1,4 +1,4 @@
-from comet_ml import Experiment
+#from comet_ml import Experiment
 import torch
 import torch.nn as nn
 import torchvision
@@ -7,25 +7,20 @@ import torchvision.transforms as transform
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-# After running `make install` in the torchmps folder, this should work
 from torchmps import ProbMPS
 from torchmps.embeddings import DataDomain
 
-#matplotlib.use("pdf")
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#torch.set_default_tensor_type('torch.cuda.FloatTensor')
+#torch.set_default_tensor_type('torch.cuda.FloatTensor') #appropriate for parallel gpu running
 
-experiment = Experiment("rpXxpS1xca85qSrX2xFjfgFsE",project_name="MPS_Mnist_1")
-
-
+#basic function loading the mnist dataset
 def loadMnist():
 
 	mnist_trainset = datasets.MNIST(root='../mnist', train=True, download=False, transform=transform.ToTensor())
 	mnist_testset = datasets.MNIST(root='../mnist', train=False, download=False, transform=transform.ToTensor())
 	return mnist_trainset.train_data, mnist_trainset.train_labels, mnist_testset.test_data, mnist_testset.test_labels
 
-
+#processing the dataset, pooling the data to 14x14 or not, transforming the data into 0-1  input or not
 def processMnist(x, pool=True, discrete=True):
 
 	if pool==True:
@@ -39,7 +34,7 @@ def processMnist(x, pool=True, discrete=True):
 	if discrete==True:
 		temp=x.numpy()
 		temp=np.where(temp>0.2, 1, 0)
-		x=torch.tensor(temp)
+		x=torch.tensor(temp).long()
 
 	x=torch.flatten(x, start_dim=1)
 
@@ -52,7 +47,7 @@ def discreteEmbedding(input):
 	ret=torch.stack([d1, d2], dim=-1)
 	return ret.float()
 
-discreteDomain=DataDomain(True, 1, 0)
+discreteDomain=DataDomain(False, 2)
 
 def sincosEmbedding(input):
 	input=input.cpu()
@@ -78,7 +73,7 @@ def embedding(data, d):
 	return newEmbed
 
 
-
+#utilitary function for the sampling
 def roll(bias):
 
 	guess=np.random.uniform()
@@ -89,7 +84,7 @@ def roll(bias):
 		else:
 			S+=val
 
-
+#create a toy data set of size 4x4 where only one 2x2 corner has random values
 def toyData(N):
 
 	data=torch.zeros([N, 4, 4])
@@ -103,7 +98,8 @@ def toyData(N):
 		data[i, l*2:(l+1)*2, h*2:(h+1)*2]=torch.tensor(quarter)
 		
 	return data.long()
-#(trainX, testX, epochs, seq_len, size, bond_dim, batch)
+
+#main function handling the learning and the logging of the errors
 def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, embDomain, lr=0.001, hist=False):
 
 	#bond_dim = 10
@@ -138,7 +134,7 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, emb
 			#print("test       ", j)
 			batchTest=dataTest[j*batch_size:min((j+1)*batch_size, len(dataTest))]
 			toLearn=batchTest.transpose(1, 0)
-			testLoss+=my_mps.loss(toLearn.float()).detach().item()*len(batchTest)
+			testLoss+=my_mps.loss(toLearn).detach().item()*len(batchTest)
 
 		testLoss=testLoss/len(dataTest)
 
@@ -158,10 +154,10 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, emb
 			test_loss_hist.append(testl)
 			train_loss_hist.append(trainl)
 
-			with experiment.train():
-				experiment.log_metric("logLikelihood", trainl, step=e)
-			with experiment.test():
-				experiment.log_metric("logLikelihood", testl, step=e)
+#			with experiment.train():
+#				experiment.log_metric("logLikelihood", trainl, step=e)
+#			with experiment.test():
+#				experiment.log_metric("logLikelihood", testl, step=e)
 
 		print(e)
 
@@ -169,31 +165,23 @@ def compute(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, emb
 		#if e>5:
 		#	optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
-		if e%5==0:
+		if e%5==0: #progressive reduction of the learning rate
 			reduction=1.61**(e/5)
 			optimizer = torch.optim.SGD(my_mps.parameters(), lr=lr/reduction)			
 
 		for j in range(totalB):
 
-			#print("       ", j)
 			batchData=data[j*batch_size:min((j+1)*batch_size, len(data))]
 			batchData=batchData.transpose(1, 0)
 
-			loss = my_mps.loss(batchData.float())  # <- Negative log likelihood loss
+			loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
 
 			loss.backward()
 			optimizer.step()
 
-
-#	if hist:
-#		test_loss_hist.append(testLoop(test_data))
-#		train_loss_hist.append(testLoop(data))
-
-	#print("epochs: "+str(epochs)+" batch size: "+str(batch_size)+" bond dim: "+str(bond_dim)+" --> loss: "+str(testLoss)+"\n")
-
 	return my_mps, test_loss_hist, train_loss_hist
 
-
+#performs a contraction of a tensor train with given input values
 def contractTrain(cores, values):
 	
 	res=cores[0]
@@ -207,7 +195,7 @@ def contractTrain(cores, values):
 
 	return res
 
-
+#constract the tensor train resulting from taking the square norm of the train, assuming that the input maps to a frame
 def contractSquareNorm(cores):
 
 	res=np.einsum("ijk, imn ->jmkn",cores[0], cores[0])
@@ -218,7 +206,7 @@ def contractSquareNorm(cores):
 
 	return res
 
-
+#return the canonical form resulting from the QR transform of the tensor train
 def get_QR_transform(cores):
 
 	newCores=[]
@@ -238,23 +226,25 @@ def get_QR_transform(cores):
 	newCores.append(newA)
 	return newCores
 
+#efficient computation of the square norm assuming a left canonical form of the tensor train
 def square_norm_leftQR(cores):
 	A=cores[-1]
 	res=np.einsum("ijk,ijm->km", A, A)
 	return res
 
-
+#returns the unormalised probabilities of the input sequence given by values 
 def get_quasi_prob(cores, values):
 	use_cores=cores[-len(values):]
 	temp=contractTrain(use_cores, values)
 	temp=np.einsum("ij, ik->jk", temp, temp)
 	return temp
 
-
+#compute the marginalised conditional probabilities associated to the possible next values in the chain
+#given_val are the values currently known, this function computes the marginalisation for the next possible 
+#value
 def margin(cores, given_val):
 
 	dim=cores[0].shape[0]
-	#use_cores=cores[-len(given_val)-1:]
 	probs=np.zeros(dim)
 
 	possible_values=[]
@@ -270,6 +260,7 @@ def margin(cores, given_val):
 	return probs, possible_values
 
 
+#sampling recursion generating a new sample from the distribution learned in the tensor train
 def sample(cores, item):
 
 	given_vals=[]
@@ -297,7 +288,7 @@ def seq_to_array(seq, w, h):
 
 
 
-#epochs, bond_dim, batch_size, seq_len
+#code testing the sampling code by generating and showing 10 images.
 def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 
 	my_mps, t1, t2 = compute(trainX, testX, epochs, bond_dim, 10, seq_len)
@@ -329,8 +320,7 @@ def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 		plt.show()
 
 
-#test()
-#(trainX, testX, epochs, seq_len, size, bond_dim, batch)
+#code computing the training and test error and saving the resulting graph
 def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, embDomain, lr):
 	#print(trainX.shape)
 
@@ -341,12 +331,6 @@ def plot(trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, embDom
 	plt.savefig("graph1")
 
 
-
-
-#N=1000
-#n=100
-#trainX=toyData(N).reshape(N, 16)
-#testX=toyData(n).reshape(n, 16)
 trainX,trainY, testX, testY=loadMnist()
 
 
@@ -357,10 +341,9 @@ def getTrainTest(trainX, testX, pool=False, discrete=True, d=2):
 
 trainX, testX=getTrainTest(trainX, testX, pool=True, discrete=False)
 
-#print(discreteEmbedding(trainX[0]))
-
+#Hyper parameter dictionary
 hyper_params = {
-	"bond_dim": 2,
+	"bond_dim": 10,
     "sequence_length": len(trainX[0]),
     "input_dim": 2,
     "batch_size": 1,
@@ -368,8 +351,6 @@ hyper_params = {
     "lr_init": 0.001
 }
 
-experiment.log_parameters(hyper_params)
-
 
 plot(trainX[:10], testX[:10], hyper_params["epochs"],hyper_params["sequence_length"],
-	hyper_params["bond_dim"], hyper_params["batch_size"], discreteEmbedding, discreteDomain, lr=hyper_params["lr_init"])
+	hyper_params["bond_dim"], hyper_params["batch_size"], sincosEmbedding, sincosDomain, lr=hyper_params["lr_init"])
