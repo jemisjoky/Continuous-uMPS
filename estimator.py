@@ -1,262 +1,203 @@
 """Probabilistic MPS written as a sklearn estimator"""
 from time import time
+from math import ceil, log
 
 import numpy as np
-
-# import matplotlib.pyplot as plt
 from sklearn.base import BaseEstimator, DensityMixin
 
-if exp_params["comet_log"]:
-    from comet_ml import Experiment
-import torch
-import torchvision
-import torch.nn as nn
 
-from torchmps import ProbMPS
-from torchmps.embeddings import DataDomain
-
-# Boilerplate config for the experiment
-dataset_dir = "./datasets/"
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# torch.set_default_tensor_type('torch.cuda.FloatTensor') #appropriate for parallel gpu running
-
-# Parameters for the experiment
-# TODO: Move these into the corresponding functions
-exp_params = {
-    "fashion_mnist": False,
-    "learn_rate": 1e-3,
-    "comet_log": False,
-    "downscale_image": True,
-    "downscale_shape": (14, 14),
-}
-
-
-def load_dataset(
-    fashion=False,
-    num_train=60000,
-    num_test=10000,
-    num_val=None,
-    downscale=False,
-    downscale_shape=None,
-    num_bins=None,
-):
+class ProbMPS_Estimator(BaseEstimator, DensityMixin):
     """
-    Function for loading unlabeled MNIST and FashionMNIST datasets
+    Wraps ProbMPS model to give scikit-learn API, simplifying model training
 
-    Supports downscaling, discretizing images via binning, and splitting into
-    extra validation set (pulled from training data)
+    Args:
+        input_dim: Dimension of the MPS input indices
+        num_inputs: Number of discrete inputs to the model
+        bond_dim: Bond dimension of the model
     """
-    assert 0 <= num_train <= 60000
-    assert 0 <= num_test <= 10000
-    if num_val is not None and num_val + num_train > 60000:
-        num_train = 60000 - num_val
 
-    if fashion:
-        dataset = torchvision.datasets.FashionMNIST
-        dset_dir = dataset_dir + "fashion_mnist/"
-    else:
-        dataset = torchvision.datasets.MNIST
-        dset_dir = dataset_dir + "mnist/"
+    def __init__(
+        self,
+        input_dim=4,
+        seq_len=3,
+        bond_dim=2,
+        complex_params=False,
+        use_bias=False,
+        embed_spec=None,
+        domain_spec=None,
+        dataset="mnist",
+        dataset_dir="./datasets/",
+        apply_downscale=True,
+        downscale_shape=(14, 14),
+        comet_log=False,
+        comet_args={},
+        logging_dir="./logs/",
+        core_init_spec="normal",
+        optimizer="Adam",
+        weight_decay=0.0001,
+        momentum=0.0,
+        constant_lr=False,
+        learning_rate_init=0.001,
+        learning_rate_final=1e-6,
+        early_stopping=False,
+        factor=0.1,
+        patience=6,
+        cooldown=2,
+        max_epochs=100,
+        batch_size=128,
+        num_train=None,
+        num_test=None,
+        num_val=None,
+        shuffle=True,
+        verbose=True,
+        seed=0,
+    ):
+        self.input_dim = input_dim
+        self.seq_len = seq_len
+        self.bond_dim = bond_dim
+        self.complex_params = complex_params
+        self.use_bias = use_bias
+        self.embed_spec = embed_spec
+        self.domain_spec = domain_spec
+        self.dataset = dataset
+        self.dataset_dir = dataset_dir
+        self.apply_downscale = apply_downscale
+        self.downscale_shape = downscale_shape
+        self.comet_log = comet_log
+        self.comet_args = comet_args
+        self.logging_dir = logging_dir
+        self.core_init_spec = core_init_spec
+        self.optimizer = optimizer
+        self.weight_decay = weight_decay
+        self.momentum = momentum
+        self.constant_lr = constant_lr
+        self.learning_rate_init = learning_rate_init
+        self.learning_rate_final = learning_rate_final
+        self.early_stopping = early_stopping
+        self.factor = factor
+        self.patience = patience
+        self.cooldown = cooldown
+        self.max_epochs = max_epochs
+        self.batch_size = batch_size
+        self.num_train = num_train
+        self.num_test = num_test
+        self.num_val = num_val
+        self.shuffle = shuffle
+        self.verbose = verbose
+        self.seed = seed
 
-    # Build the desired transform for MNIST images
-    tf = torchvision.transforms
-    transform = tf.Compose([tf.ToTensor()])
-    if downscale:
-        transform.insert(0, tf.Resize(downscale_shape))
+    def fit(self, X, y=None):
+        """
+        Trains a probabilistic MPS model on a specified dataset
+        """
+        if self.comet_log:
+            from comet_ml import Experiment
+        global torch
+        import torch
+        import torchvision
+        import torch.nn as nn
 
-    # Get the desired number of flattened images
-    train = dataset(root=dset_dir, train=True, download=True, transform=transform)
-    test = dataset(root=dset_dir, train=False, download=True, transform=transform)
-    train_data = train.data[:num_train].reshape(num_train, -1)
-    test_data = train.data[:num_test].reshape(num_test, -1)
-    if num_val is None:
-        out = (train_data, test_data)
-    else:
-        val_data = train.data[-num_val:].reshape(num_val, -1)
-        out = (train_data, val_data, test_data)
+        from torchmps import ProbMPS
+        from torchmps.embeddings import DataDomain
 
-    # Finally, discretize images
-    if num_bins is not None:
-        out = tuple(bin_data(ds, num_bins) for ds in out)
-    return out
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # TODO: Initialize embedding, using embed_spec and domain_spec
 
-def bin_data(data, num_bins=None):
-    """
-    Discretize greyscale values into a finite number of bins
-    """
-    if num_bins is None:
-        return data
+        # Initialize model
+        my_mps = ProbMPS(
+            self.seq_len,
+            self.input_dim,
+            self.bond_dim,
+            complex_params=self.complex_params,
+            use_bias=self.use_bias,
+            # embed_fun=embedding,
+            # domain=embDomain,
+        )
+        my_mps.to(device)
 
-    raise NotImplementedError
+        # Initialize optimizer and LR scheduler
+        optimizer, scheduler = setup_opt_sched(
+            my_mps.parameters(),
+            self.optimizer,
+            self.weight_decay,
+            self.momentum,
+            self.constant_lr,
+            self.learning_rate_init,
+            self.learning_rate_final,
+            self.early_stopping,
+            self.factor,
+            self.patience,
+            self.cooldown,
+            self.max_epochs,
+            self.verbose,
+        )
 
+        data = trainX
 
-def discreteEmbedding(input):
-    input = input.cpu()
-    d1 = torch.tensor(np.ones(input.shape) * (input.numpy() > 0.2))
-    d2 = torch.tensor(np.ones(input.shape) * (input.numpy() < 0.2))
-    ret = torch.stack([d1, d2], dim=-1)
-    return ret.float()
+        totalB = int(len(data) / batch_size)
+        print(totalB)
+        # data=data.transpose(0, 1)
 
+        test_data = testX
 
-discreteDomain = DataDomain(False, 2)
+        def testLoop(dataTest):
 
+            totalBT = int(len(dataTest) / batch_size)
+            testLoss = 0
+            for j in range(totalBT):
 
-def sincosEmbedding(input):
-    input = input.cpu()
-    d1 = np.cos(input * np.pi / 2)
-    d2 = np.sin(input * np.pi / 2)
-    ret = torch.stack([d1, d2], dim=-1)
-    return ret.float()
+                # print("test       ", j)
+                batchTest = dataTest[
+                    j * batch_size : min((j + 1) * batch_size, len(dataTest))
+                ]
+                toLearn = batchTest.transpose(1, 0)
+                testLoss += my_mps.loss(toLearn).detach().item() * len(batchTest)
 
+            testLoss = testLoss / len(dataTest)
 
-sincosDomain = DataDomain(True, 1, 0)
+            return testLoss
 
+        prevLoss = -np.log(len(data))
 
-def embeddingFunc(vect, s, d):
-    emb = np.cos(vect * np.pi / 2) ** (d - s) * np.sin(vect * np.pi / 2) ** (s - 1)
-    # print(emb.shape, vect.shape)
-    return emb
+        for e in range(epochs):
 
+            order = np.array(range(len(trainX)))
+            np.random.shuffle(order)
+            trainX[np.array(range(len(trainX)))] = trainX[order]
 
-def embedding(data, d):
+            if hist:
+                testl = testLoop(test_data)
+                trainl = testLoop(data)
+                test_loss_hist.append(testl)
+                train_loss_hist.append(trainl)
 
-    newEmbed = np.zeros([len(data), len(data[0]), d])
-    for s in range(d):
-        # print(newEmbed[:,:, s].shape)
-        newEmbed[:, :, s] = embeddingFunc(data.cpu(), s + 1, d)
+            #             with experiment.train():
+            #                 experiment.log_metric("logLikelihood", trainl, step=e)
+            #             with experiment.test():
+            #                 experiment.log_metric("logLikelihood", testl, step=e)
 
-    return newEmbed
+            print(e)
 
+            # adapatation of the learning rate
+            # if e>5:
+            #     optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
 
-# utilitary function for the sampling
-def roll(bias):
+            if e % 5 == 0:  # progressive reduction of the learning rate
+                reduction = 1.61 ** (e / 5)
+                optimizer = torch.optim.SGD(my_mps.parameters(), lr=lr / reduction)
 
-    guess = np.random.uniform()
-    S = 0
-    for i, val in enumerate(bias):
-        if guess < S + val:
-            return i
-        else:
-            S += val
+            for j in range(totalB):
 
+                batchData = data[j * batch_size : min((j + 1) * batch_size, len(data))]
+                batchData = batchData.transpose(1, 0)
 
-# create a toy data set of size 4x4 where only one 2x2 corner has random values
-def toyData(N):
+                loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
 
-    data = torch.zeros([N, 4, 4])
+                loss.backward()
+                optimizer.step()
 
-    for i in range(N):
-
-        quarter = np.random.random([2, 2]) > 0.5
-        bias = [0.333, 0.667]
-        l = roll(bias)
-        h = roll(bias)
-        data[i, l * 2 : (l + 1) * 2, h * 2 : (h + 1) * 2] = torch.tensor(quarter)
-
-    return data.long()
-
-
-# main function handling the learning and the logging of the errors
-def compute(
-    trainX,
-    testX,
-    epochs,
-    seq_len,
-    bond_dim,
-    batch_size,
-    embedding,
-    embDomain,
-    lr=0.001,
-    hist=False,
-):
-
-    # bond_dim = 10
-    input_dim = 2
-    # batch_size = 100
-    sequence_len = seq_len
-    complex_params = False
-
-    # epochs=1
-    test_loss_hist = []
-    train_loss_hist = []
-
-    my_mps = ProbMPS(
-        sequence_len,
-        input_dim,
-        bond_dim,
-        complex_params,
-        embed_fun=embedding,
-        domain=embDomain,
-    )
-    my_mps.to(device)
-    optimizer = torch.optim.SGD(my_mps.parameters(), lr=lr)
-
-    data = trainX
-
-    totalB = int(len(data) / batch_size)
-    print(totalB)
-    # data=data.transpose(0, 1)
-
-    test_data = testX
-
-    def testLoop(dataTest):
-
-        totalBT = int(len(dataTest) / batch_size)
-        testLoss = 0
-        for j in range(totalBT):
-
-            # print("test       ", j)
-            batchTest = dataTest[
-                j * batch_size : min((j + 1) * batch_size, len(dataTest))
-            ]
-            toLearn = batchTest.transpose(1, 0)
-            testLoss += my_mps.loss(toLearn).detach().item() * len(batchTest)
-
-        testLoss = testLoss / len(dataTest)
-
-        return testLoss
-
-    prevLoss = -np.log(len(data))
-
-    for e in range(epochs):
-
-        order = np.array(range(len(trainX)))
-        np.random.shuffle(order)
-        trainX[np.array(range(len(trainX)))] = trainX[order]
-
-        if hist:
-            testl = testLoop(test_data)
-            trainl = testLoop(data)
-            test_loss_hist.append(testl)
-            train_loss_hist.append(trainl)
-
-        #             with experiment.train():
-        #                 experiment.log_metric("logLikelihood", trainl, step=e)
-        #             with experiment.test():
-        #                 experiment.log_metric("logLikelihood", testl, step=e)
-
-        print(e)
-
-        # adapatation of the learning rate
-        # if e>5:
-        #     optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
-
-        if e % 5 == 0:  # progressive reduction of the learning rate
-            reduction = 1.61 ** (e / 5)
-            optimizer = torch.optim.SGD(my_mps.parameters(), lr=lr / reduction)
-
-        for j in range(totalB):
-
-            batchData = data[j * batch_size : min((j + 1) * batch_size, len(data))]
-            batchData = batchData.transpose(1, 0)
-
-            loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
-
-            loss.backward()
-            optimizer.step()
-
-    return my_mps, test_loss_hist, train_loss_hist
+        return my_mps, test_loss_hist, train_loss_hist
 
 
 # performs a contraction of a tensor train with given input values
@@ -425,7 +366,7 @@ def plot(
     plt.savefig("graph1")
 
 
-trainX, testX = load_dataset()
+# trainX, testX = load_dataset()
 
 
 def getTrainTest(trainX, testX, pool=False, discrete=True, d=2):
@@ -434,27 +375,134 @@ def getTrainTest(trainX, testX, pool=False, discrete=True, d=2):
     return trainX, testX
 
 
-trainX, testX = getTrainTest(trainX, testX, pool=True, discrete=False)
-
-# Hyper parameter dictionary
-hyper_params = {
-    "bond_dim": 10,
-    "sequence_length": len(trainX[0]),
-    "input_dim": 2,
-    "batch_size": 1,
-    "epochs": 10,
-    "lr_init": 0.001,
-}
+def discreteEmbedding(input):
+    input = input.cpu()
+    d1 = torch.tensor(np.ones(input.shape) * (input.numpy() > 0.2))
+    d2 = torch.tensor(np.ones(input.shape) * (input.numpy() < 0.2))
+    ret = torch.stack([d1, d2], dim=-1)
+    return ret.float()
 
 
-plot(
-    trainX[:10],
-    testX[:10],
-    hyper_params["epochs"],
-    hyper_params["sequence_length"],
-    hyper_params["bond_dim"],
-    hyper_params["batch_size"],
-    sincosEmbedding,
-    sincosDomain,
-    lr=hyper_params["lr_init"],
-)
+# discreteDomain = DataDomain(False, 2)
+
+
+def sincosEmbedding(input):
+    input = input.cpu()
+    d1 = np.cos(input * np.pi / 2)
+    d2 = np.sin(input * np.pi / 2)
+    ret = torch.stack([d1, d2], dim=-1)
+    return ret.float()
+
+
+# sincosDomain = DataDomain(True, 1, 0)
+
+
+def embeddingFunc(vect, s, d):
+    emb = np.cos(vect * np.pi / 2) ** (d - s) * np.sin(vect * np.pi / 2) ** (s - 1)
+    # print(emb.shape, vect.shape)
+    return emb
+
+
+def embedding(data, d):
+
+    newEmbed = np.zeros([len(data), len(data[0]), d])
+    for s in range(d):
+        # print(newEmbed[:,:, s].shape)
+        newEmbed[:, :, s] = embeddingFunc(data.cpu(), s + 1, d)
+
+    return newEmbed
+
+
+# utilitary function for the sampling
+def roll(bias):
+
+    guess = np.random.uniform()
+    S = 0
+    for i, val in enumerate(bias):
+        if guess < S + val:
+            return i
+        else:
+            S += val
+
+
+# plot(
+#     trainX[:10],
+#     testX[:10],
+#     hyper_params["epochs"],
+#     hyper_params["sequence_length"],
+#     hyper_params["bond_dim"],
+#     hyper_params["batch_size"],
+#     sincosEmbedding,
+#     sincosDomain,
+#     lr=hyper_params["lr_init"],
+# )
+
+
+def setup_opt_sched(
+    parameters,
+    optimizer,
+    weight_decay,
+    momentum,
+    constant_lr,
+    learning_rate_init,
+    learning_rate_final,
+    early_stopping,
+    factor,
+    patience,
+    cooldown,
+    max_epochs,
+    verbose,
+):
+    assert hasattr(torch.optim, optimizer)
+
+    # Define optimizer
+    if optimizer in ["Adam", "AdamW", "Adamax", "Adadelta", "Adagrad"]:
+        opt = getattr(torch.optim, optimizer)(
+            parameters, lr=learning_rate_init, weight_decay=weight_decay
+        )
+    elif optimizer in ["SGD", "RMSprop"]:
+        opt = getattr(torch.optim, optimizer)(
+            parameters,
+            lr=learning_rate_init,
+            weight_decay=weight_decay,
+            momentum=momentum,
+        )
+    else:
+        raise NotImplementedError
+
+    # Define (tweaked) scheduler, whose step method outputs early stopping info
+    if constant_lr:
+        factor = 1.0
+        max_reductions = float("inf")
+    else:
+        max_reductions = ceil(
+            log(learning_rate_final / learning_rate_init) / log(factor)
+        )
+    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, factor=factor, patience=patience, cooldown=cooldown, verbose=verbose
+    )
+    sched.num_reductions = 0
+    sched.__reduce_lr = sched._reduce_lr
+    sched._step = sched.step
+
+    def custom_reduce_lr(self, epoch):
+        self.num_reductions += 1
+        self.__reduce_lr(self, epoch)
+
+    def custom_step(self, metrics, epoch=None):
+        self._step(metrics, epoch)
+        if not early_stopping:
+            return False
+        if self.num_reductions >= 1 if constant_lr else max_reductions:
+            return True
+        return False
+
+    sched.step = custom_step
+    sched._reduce_lr = custom_reduce_lr
+
+    return opt, sched
+
+
+if __name__ == "__main__":
+    estimator = ProbMPS_Estimator()
+    estimator.fit(None)
