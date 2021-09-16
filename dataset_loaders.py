@@ -67,5 +67,5 @@ def bin_data(input, num_bins=None):
         bin_inds = i / num_bins <= input <= (i + 1) / num_bins
         out_data[bin_inds] = i
     assert out_data.max() >= 0
-    
+
     return out_data
