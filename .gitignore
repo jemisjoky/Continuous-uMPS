@@ -1,2 +1,7 @@
 # Datasets
 datasets/
+
+# Saved models
+models/
+
+__pycache__

@@ -1,9 +1,12 @@
 """Probabilistic MPS written as a sklearn estimator"""
 from time import time
-from math import ceil, log
+from copy import deepcopy
+from math import ceil, log, prod
 
 import numpy as np
 from sklearn.base import BaseEstimator, DensityMixin
+
+from utils import FakeLogger, null
 
 
 class ProbMPS_Estimator(BaseEstimator, DensityMixin):
@@ -18,20 +21,19 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
     def __init__(
         self,
-        input_dim=4,
-        seq_len=3,
-        bond_dim=2,
+        input_dim=2,
+        bond_dim=1,
         complex_params=False,
         use_bias=False,
         embed_spec=None,
         domain_spec=None,
+        num_bins=None,
         dataset="mnist",
         dataset_dir="./datasets/",
         apply_downscale=True,
         downscale_shape=(14, 14),
         comet_log=False,
         comet_args={},
-        logging_dir="./logs/",
         core_init_spec="normal",
         optimizer="Adam",
         weight_decay=0.0001,
@@ -43,6 +45,8 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         factor=0.1,
         patience=6,
         cooldown=2,
+        slim_eval=False,
+        parallel_eval=False,
         max_epochs=100,
         batch_size=128,
         num_train=None,
@@ -50,22 +54,23 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         num_val=None,
         shuffle=True,
         verbose=True,
+        save_model=False,
+        model_dir="./models/",
         seed=0,
     ):
         self.input_dim = input_dim
-        self.seq_len = seq_len
         self.bond_dim = bond_dim
         self.complex_params = complex_params
         self.use_bias = use_bias
         self.embed_spec = embed_spec
         self.domain_spec = domain_spec
+        self.num_bins = num_bins
         self.dataset = dataset
         self.dataset_dir = dataset_dir
         self.apply_downscale = apply_downscale
         self.downscale_shape = downscale_shape
         self.comet_log = comet_log
         self.comet_args = comet_args
-        self.logging_dir = logging_dir
         self.core_init_spec = core_init_spec
         self.optimizer = optimizer
         self.weight_decay = weight_decay
@@ -77,6 +82,8 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         self.factor = factor
         self.patience = patience
         self.cooldown = cooldown
+        self.slim_eval = slim_eval
+        self.parallel_eval = parallel_eval
         self.max_epochs = max_epochs
         self.batch_size = batch_size
         self.num_train = num_train
@@ -84,28 +91,60 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         self.num_val = num_val
         self.shuffle = shuffle
         self.verbose = verbose
+        self.save_model = save_model
+        self.model_dir = model_dir
         self.seed = seed
 
-    def fit(self, X, y=None):
+    def fit(self, X=None, y=None):
         """
         Trains a probabilistic MPS model on a specified dataset
         """
+        now = time()
         if self.comet_log:
             from comet_ml import Experiment
         global torch
         import torch
-        import torchvision
-        import torch.nn as nn
 
         from torchmps import ProbMPS
         from torchmps.embeddings import DataDomain
 
+        # Conditional print function
+        global cprint
+        cprint = print if self.verbose else null
+
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        train_g = torch.Generator(device=device)
+        train_g.manual_seed(self.seed)
+        self.val_g = torch.Generator(device=device)
+        self.val_g.manual_seed(self.seed)
+
+        # Import our dataset
+        self.dataset = self.dataset.lower()
+        if self.dataset in ["mnist", "fashion_mnist"]:
+            from datasets import load_mnist
+
+            fashion = self.dataset == "fashion_mnist"
+            train, val, test = load_mnist(
+                fashion=fashion,
+                num_train=self.num_train,
+                num_test=self.num_test,
+                num_val=self.num_val,
+                downscale=self.apply_downscale,
+                downscale_shape=self.downscale_shape,
+                num_bins=self.num_bins,
+                dataset_dir=self.dataset_dir,
+                device=device,
+            )
+            self.seq_len = (
+                prod(self.downscale_shape) if self.apply_downscale else 28 ** 2
+            )
+        else:
+            raise NotImplementedError
 
         # TODO: Initialize embedding, using embed_spec and domain_spec
 
         # Initialize model
-        my_mps = ProbMPS(
+        self.model = ProbMPS(
             self.seq_len,
             self.input_dim,
             self.bond_dim,
@@ -114,11 +153,11 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             # embed_fun=embedding,
             # domain=embDomain,
         )
-        my_mps.to(device)
+        self.model.to(device)
 
         # Initialize optimizer and LR scheduler
         optimizer, scheduler = setup_opt_sched(
-            my_mps.parameters(),
+            self.model.parameters(),
             self.optimizer,
             self.weight_decay,
             self.momentum,
@@ -133,71 +172,121 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             self.verbose,
         )
 
-        data = trainX
+        # Initialize Comet data logging
+        if self.comet_log:
+            # TODO: Make experiment name
+            exp_name = ""
+            logger = Experiment(exp_name)
+        else:
+            logger = FakeLogger()
 
-        totalB = int(len(data) / batch_size)
-        print(totalB)
-        # data=data.transpose(0, 1)
-
-        test_data = testX
-
-        def testLoop(dataTest):
-
-            totalBT = int(len(dataTest) / batch_size)
-            testLoss = 0
-            for j in range(totalBT):
-
-                # print("test       ", j)
-                batchTest = dataTest[
-                    j * batch_size : min((j + 1) * batch_size, len(dataTest))
-                ]
-                toLearn = batchTest.transpose(1, 0)
-                testLoss += my_mps.loss(toLearn).detach().item() * len(batchTest)
-
-            testLoss = testLoss / len(dataTest)
-
-            return testLoss
-
-        prevLoss = -np.log(len(data))
-
-        for e in range(epochs):
-
-            order = np.array(range(len(trainX)))
-            np.random.shuffle(order)
-            trainX[np.array(range(len(trainX)))] = trainX[order]
-
-            if hist:
-                testl = testLoop(test_data)
-                trainl = testLoop(data)
-                test_loss_hist.append(testl)
-                train_loss_hist.append(trainl)
-
-            #             with experiment.train():
-            #                 experiment.log_metric("logLikelihood", trainl, step=e)
-            #             with experiment.test():
-            #                 experiment.log_metric("logLikelihood", testl, step=e)
-
-            print(e)
-
-            # adapatation of the learning rate
-            # if e>5:
-            #     optimizer = torch.optim.Adam(my_mps.parameters(), lr=lr/10)
-
-            if e % 5 == 0:  # progressive reduction of the learning rate
-                reduction = 1.61 ** (e / 5)
-                optimizer = torch.optim.SGD(my_mps.parameters(), lr=lr / reduction)
-
-            for j in range(totalB):
-
-                batchData = data[j * batch_size : min((j + 1) * batch_size, len(data))]
-                batchData = batchData.transpose(1, 0)
-
-                loss = my_mps.loss(batchData)  # <- Negative log likelihood loss
+        def optimize_one_epoch():
+            """Carries out one epoch of gradient updates over training data"""
+            train_loss = 0.0
+            for num, batch in enumerate(
+                torch.utils.data.DataLoader(
+                    train,
+                    batch_size=self.batch_size,
+                    shuffle=self.shuffle,
+                    generator=train_g,
+                ),
+                start=1,
+            ):
+                cprint(f"BATCH {num}")
+                optimizer.zero_grad()
+                loss = self.model.loss(
+                    *batch, slim_eval=self.slim_eval, parallel_eval=self.parallel_eval
+                )
+                train_loss += loss.detach()
 
                 loss.backward()
                 optimizer.step()
 
-        return my_mps, test_loss_hist, train_loss_hist
+            # Return average loss
+            train_loss /= num
+
+        cprint(f"Initialization time: {time() - now:.2f}s")
+        cprint("Starting training...\n")
+        now = time()
+
+        # Run the actual training loop
+        try:
+            for epoch in range(self.max_epochs):
+                cprint(f"Epoch {epoch}")
+
+                # Optimize model parameters
+                train_loss = optimize_one_epoch()
+                cprint(f"  Train loss: {train_loss}")
+
+                # Evaluate on the validation set
+                val_loss = -self.score(val)
+                cprint(f"  Val loss:   {train_loss}")
+
+                # Log data, check for best val loss
+                logger.log_metrics({"train_loss": train_loss, "val_loss": val_loss})
+                self._check_best(val_loss)
+                cprint(f"  Epoch time: {now - time():.2f}s")
+                now = time()
+
+                # Check for early stopping
+                if scheduler.step(val_loss):
+                    cprint("Non-improving val loss, stopping training early")
+                    break
+
+        except KeyboardInterrupt:
+            cprint("Training stopped early by user")
+
+        # Evaluate test loss using final model, and all losses using best model
+        test_loss = -self.score(test)
+        self.model.load_state_dict(self.best_model)
+        best_train, best_val, best_test = [-self.score(ds) for ds in [train, val, test]]
+        logger.log_metrics(
+            {
+                "test_loss": test_loss,
+                "best_train": best_train,
+                "best_val": best_val,
+                "best_test": best_test,
+            }
+        )
+
+        # Save model to disk if desired
+        if self.save_model:
+            torch.save(self.model_dir + exp_name + ".model")
+
+        return self
+
+    def score(self, X, y=None):
+        """
+        Return the average log likelihood of the input dataset
+        """
+        assert isinstance(X, torch.utils.data.Dataset)
+        val_loss = 0.0
+        for num, batch in enumerate(
+            torch.utils.data.DataLoader(
+                X,
+                batch_size=self.batch_size,
+                shuffle=self.shuffle,
+                generator=self.val_g,
+            ),
+            start=1,
+        ):
+            with torch.no_grad():
+                loss = self.model.loss(
+                    *batch, slim_eval=self.slim_eval, parallel_eval=self.parallel_eval
+                )
+            val_loss += loss.detach()
+
+        # Return average loss, negative to fit with sklearn convention
+        return -val_loss / num
+
+    def _check_best(self, val_loss):
+        """
+        Checks if the current validation loss is best, saves model
+        """
+        best = val_loss < self.best_loss if hasattr(self, "best_loss") else True
+        if best:
+            self.best_loss = val_loss
+            self.best_model = deepcopy(self.model.state_dict())
 
 
 # performs a contraction of a tensor train with given input values
@@ -335,7 +424,7 @@ def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 
     for i in range(10):
         p, vals = sample(trans_cores, seq_len)
-        print(p / Z)
+        cprint(p / Z)
         im = seq_to_array(vals, sizes, sizes)
 
         plt.imshow(im)
@@ -346,7 +435,7 @@ def test(trainX, testX, epochs, bond_dim, seq_len, sizes):
 def plot(
     trainX, testX, epochs, seq_len, bond_dim, batch_size, embedding, embDomain, lr
 ):
-    # print(trainX.shape)
+    # cprint(trainX.shape)
 
     my_mps, test_hist, train_hist = compute(
         trainX,
@@ -399,7 +488,7 @@ def sincosEmbedding(input):
 
 def embeddingFunc(vect, s, d):
     emb = np.cos(vect * np.pi / 2) ** (d - s) * np.sin(vect * np.pi / 2) ** (s - 1)
-    # print(emb.shape, vect.shape)
+    # cprint(emb.shape, vect.shape)
     return emb
 
 
@@ -407,7 +496,7 @@ def embedding(data, d):
 
     newEmbed = np.zeros([len(data), len(data[0]), d])
     for s in range(d):
-        # print(newEmbed[:,:, s].shape)
+        # cprint(newEmbed[:,:, s].shape)
         newEmbed[:, :, s] = embeddingFunc(data.cpu(), s + 1, d)
 
     return newEmbed
@@ -504,5 +593,12 @@ def setup_opt_sched(
 
 
 if __name__ == "__main__":
-    estimator = ProbMPS_Estimator()
+    estimator = ProbMPS_Estimator(
+        num_bins=2,
+        batch_size=100,
+        num_train=100,
+        num_val=100,
+        num_test=100,
+        verbose=True,
+    )
     estimator.fit(None)

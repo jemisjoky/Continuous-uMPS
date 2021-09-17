@@ -1,9 +1,9 @@
 """Dataset loaders for MNIST and fashion MNIST"""
-import numpy as np
+import torch
 import torchvision
+from torchvision import transforms as tf
 
-
-def _load_mnist(
+def load_mnist(
     fashion=False,
     num_train=60000,
     num_test=10000,
@@ -12,6 +12,7 @@ def _load_mnist(
     downscale_shape=None,
     num_bins=None,
     dataset_dir=None,
+    device=None,
 ):
     """
     Function for loading unlabeled MNIST and FashionMNIST datasets
@@ -31,28 +32,34 @@ def _load_mnist(
         dataset = torchvision.datasets.MNIST
         dset_dir = dataset_dir + "mnist/"
 
-    # Build the desired transform for MNIST images
-    tf = torchvision.transforms
-    transform = tf.Compose([tf.ToTensor()])
-    if downscale:
-        transform.insert(0, tf.Resize(downscale_shape))
-
-    # Get the desired number of flattened images
-    train = dataset(root=dset_dir, train=True, download=True, transform=transform)
-    test = dataset(root=dset_dir, train=False, download=True, transform=transform)
-    train_data = train.data[:num_train].reshape(num_train, -1)
-    test_data = test.data[:num_test].reshape(num_test, -1)
+    # Get the desired number of images, separate into splits
+    train = dataset(root=dset_dir, train=True, download=True, transform=tf.ToTensor())
+    test = dataset(root=dset_dir, train=False, download=True, transform=tf.ToTensor())
+    train_data = train.data[:num_train]
+    test_data = test.data[:num_test]
     if num_val is None:
+        sizes = (num_train, num_test)
         out = (train_data, test_data)
     else:
-        val_data = train.data[-num_val:].reshape(num_val, -1)
+        val_data = train.data[-num_val:]
+        sizes = (num_train, num_val, num_test)
         out = (train_data, val_data, test_data)
 
-    # Finally, discretize images
-    out = tuple(bin_data(ds, num_bins) for ds in out)
-    return out
+    # Resize images, flatten, and rescale values
+    transform = tf.Resize(downscale_shape) if downscale else lambda x: x
+    out = tuple(transform(ds).reshape(ns, -1) / 255 for ns, ds in zip(sizes, out))
+
+    # Move datasets to the appropriate device
+    if device is not None:
+        out = tuple(ds.to(device) for ds in out)
+
+    # Finally, discretize images and put in pytorch Dataset
+    if num_bins is not None:
+        out = tuple(bin_data(ds, num_bins).long() for ds in out)
+    return tuple(torch.utils.data.TensorDataset(ds) for ds in out)
 
 
+@torch.no_grad()
 def bin_data(input, num_bins=None):
     """
     Discretize greyscale values into a finite number of bins
@@ -63,8 +70,8 @@ def bin_data(input, num_bins=None):
 
     # Set each of the corresponding bin indices
     out_data = torch.full_like(input, -1)
-    for i in num_bins:
-        bin_inds = i / num_bins <= input <= (i + 1) / num_bins
+    for i in range(num_bins):
+        bin_inds = (i / num_bins <= input) * (input <= (i + 1) / num_bins)
         out_data[bin_inds] = i
     assert out_data.max() >= 0
 
