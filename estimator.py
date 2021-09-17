@@ -1,6 +1,7 @@
 """Probabilistic MPS written as a sklearn estimator"""
 from time import time
 from copy import deepcopy
+from types import MethodType
 from math import ceil, log, prod
 
 import numpy as np
@@ -192,7 +193,6 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
                 ),
                 start=1,
             ):
-                cprint(f"BATCH {num}")
                 optimizer.zero_grad()
                 loss = self.model.loss(
                     *batch, slim_eval=self.slim_eval, parallel_eval=self.parallel_eval
@@ -204,6 +204,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
             # Return average loss
             train_loss /= num
+            return train_loss
 
         cprint(f"Initialization time: {time() - now:.2f}s")
         cprint("Starting training...\n")
@@ -216,30 +217,35 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
                 # Optimize model parameters
                 train_loss = optimize_one_epoch()
-                cprint(f"  Train loss: {train_loss}")
+                cprint(f"  Train loss: {train_loss:.2f}")
 
                 # Evaluate on the validation set
                 val_loss = -self.score(val)
-                cprint(f"  Val loss:   {train_loss}")
+                cprint(f"  Val loss:   {val_loss:.2f}")
 
                 # Log data, check for best val loss
                 logger.log_metrics({"train_loss": train_loss, "val_loss": val_loss})
                 self._check_best(val_loss)
-                cprint(f"  Epoch time: {now - time():.2f}s")
+                cprint(f"  Epoch time: {time() - now:.2f}s")
                 now = time()
 
                 # Check for early stopping
                 if scheduler.step(val_loss):
-                    cprint("Non-improving val loss, stopping training early")
+                    cprint("\nNon-improving val loss, stopping training early")
                     break
 
         except KeyboardInterrupt:
-            cprint("Training stopped early by user")
+            cprint("\nTraining stopped early by user")
 
         # Evaluate test loss using final model, and all losses using best model
         test_loss = -self.score(test)
         self.model.load_state_dict(self.best_model)
         best_train, best_val, best_test = [-self.score(ds) for ds in [train, val, test]]
+
+        cprint(f"\nTrain loss at best: {best_train:.2f}")
+        cprint(f"Val loss at best:   {best_val:.2f}")
+        cprint(f"Test loss at best:  {best_test:.2f}")
+        cprint(f"Test loss at end:   {test_loss:.2f}")
         logger.log_metrics(
             {
                 "test_loss": test_loss,
@@ -586,8 +592,8 @@ def setup_opt_sched(
             return True
         return False
 
-    sched.step = custom_step
-    sched._reduce_lr = custom_reduce_lr
+    sched.step = MethodType(custom_step, sched)
+    sched._reduce_lr = MethodType(custom_reduce_lr, sched)
 
     return opt, sched
 

@@ -3,6 +3,7 @@ import torch
 import torchvision
 from torchvision import transforms as tf
 
+
 def load_mnist(
     fashion=False,
     num_train=60000,
