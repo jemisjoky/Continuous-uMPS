@@ -56,7 +56,7 @@ def load_mnist(
 
     # Finally, discretize images and put in pytorch Dataset
     if num_bins is not None:
-        out = tuple(bin_data(ds, num_bins).long() for ds in out)
+        out = tuple(bin_data(ds, num_bins) for ds in out)
     return tuple(torch.utils.data.TensorDataset(ds) for ds in out)
 
 
@@ -76,4 +76,4 @@ def bin_data(input, num_bins=None):
         out_data[bin_inds] = i
     assert out_data.max() >= 0
 
-    return out_data
+    return out_data.long()
