@@ -4,4 +4,7 @@ datasets/
 # Saved models
 models/
 
+# Comet key
+.comet.config
+
 __pycache__

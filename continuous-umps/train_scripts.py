@@ -1,3 +1,5 @@
+from itertools import product
+
 from estimator import ProbMPS_Estimator
 
 default_config = {
@@ -14,8 +16,8 @@ default_config = {
     "downscale_shape": (14, 14),
     "comet_log": True,
     "comet_args": {},
-    "project_name": "Continuous_DEBUG",
-    "core_init_spec": "normal",
+    "project_name": "",
+    "core_init_spec": "near_eye",
     "optimizer": "Adam",
     "weight_decay": 0.0001,
     "momentum": 0.0,
@@ -43,24 +45,50 @@ default_config = {
 # Define the collection of experiments to run
 first_run = default_config.copy()
 first_run.update(
+    # # Debug settings
+    # {
+    #     "bond_dim": 10,
+    #     "max_calls": 1000,
+    #     "num_train": 100,
+    #     "num_val": 100,
+    #     "num_test": 100,
+    #     "comet_log": True,
+    #     "early_stopping": True,
+    #     "patience": 0,
+    #     "cooldown": 1,
+    #     "num_bins": 2,
+    #     "embed_spec": "trig",
+    # }
+    # Real settings
     {
-        "num_bins": 2,
+        "project_name": "continuous_fashion_v1",
+        "dataset": "fashion_mnist",
+        # "num_bins": 2,
         "bond_dim": 10,
-        "max_calls": 50000,
         "max_calls": 50000,
         "num_train": 10000,
         "num_val": 5000,
-        "num_test": 100,
+        "num_test": 5000,
         "comet_log": True,
         "early_stopping": True,
         "patience": 0,
         "cooldown": 1,
+        "embed_spec": "trig",
+        "core_init_spec": "normal",
     }
 )
-exp_list = [first_run]
-for num_bins in range(3, 6):
+exp_list = []
+bin_list = [2, 3, 4, 5, 10]
+for dataset, embed_spec, num_bins in product(
+    ["mnist", "fashion_mnist"], [None, "trig"], bin_list
+):
     next_run = first_run.copy()
+    next_run["dataset"] = dataset
+    next_run["embed_spec"] = embed_spec
     next_run["num_bins"] = num_bins
+    next_run["project_name"] = (
+        "continuous_fashion_v1" if dataset == "fashion_mnist" else "continuous_mnist_v1"
+    )
     exp_list.append(next_run)
 
 # Run the experiments
