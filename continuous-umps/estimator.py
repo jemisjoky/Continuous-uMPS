@@ -8,8 +8,11 @@ from math import ceil, log, prod
 import numpy as np
 from comet_ml import Experiment
 from sklearn.base import BaseEstimator, DensityMixin
+import torch
 
+from torchmps import ProbMPS
 from utils import FakeLogger, null
+from torchmps.embeddings import unit_interval, trig_embed
 
 
 class ProbMPS_Estimator(BaseEstimator, DensityMixin):
@@ -104,10 +107,38 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         """
         Trains a probabilistic MPS model on a specified dataset
         """
-        global torch
-        import torch
-
         start_time = time()
+
+        # Modify some experimental parameters in advance of logging
+        self.max_epochs = ceil(self.max_calls / self.num_train)
+        self.dataset = self.dataset.lower()
+
+        # Initialize embedding using embed_spec and domain_spec
+        assert self.embed_spec in [None, "trig"]
+        if self.embed_spec == "trig":
+            assert self.num_bins >= 2
+            embed_fun = partial(trig_embed, emb_dim=self.num_bins)
+            embed_domain = unit_interval
+            self.input_dim = self.num_bins
+        elif self.embed_spec is None:
+            # If we're binning data, set the input dimension to number of bins
+            embed_fun = embed_domain = None
+            self.input_dim = self.num_bins
+        else:
+            raise NotImplementedError
+
+        # Build experiment name
+        exp_name = (
+            f"bd{self.bond_dim}_nb{self.num_bins}_nt{round(self.num_train / 1000)}k"
+        )
+        if self.embed_spec == "sin-cos":
+            exp_name = "sc_" + exp_name
+        elif self.embed_spec == "trig":
+            exp_name = "trig_" + exp_name
+        if self.core_init_spec == "normal":
+            exp_name = exp_name + "_gs"
+        elif self.core_init_spec is None:
+            exp_name = exp_name + "_eye"
 
         # Initialize Comet data logging
         if self.comet_log:
@@ -116,14 +147,9 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
                 raise ValueError("Must specify experiment name to use comet logging")
             logger = Experiment(project_name=self.project_name)
             logger.log_parameters(self.__dict__)
-            logger.set_name(
-                f"bd{self.bond_dim}_nb{self.num_bins}_nt{round(self.num_train / 1000)}k_"
-            )
+            logger.set_name(exp_name)
         else:
             logger = FakeLogger()
-
-        from torchmps import ProbMPS
-        from torchmps.embeddings import DataDomain
 
         # Conditional print function
         global cprint
@@ -134,10 +160,8 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         train_g.manual_seed(self.seed)
         self.val_g = torch.Generator(device=device)
         self.val_g.manual_seed(self.seed)
-        self.max_epochs = ceil(self.max_calls / self.num_train)
 
         # Import our dataset
-        self.dataset = self.dataset.lower()
         if self.dataset in ["mnist", "fashion_mnist"]:
             from datasets import load_mnist
 
@@ -159,25 +183,25 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         else:
             raise NotImplementedError
 
-        # TODO: Initialize embedding, using embed_spec and domain_spec
-
-        # If we're binning data, set the input dimension to that
-        if self.num_bins is not None:
-            self.input_dim = self.num_bins
-            # Adjust loss so increasing number of bins isn't penalized
-            self.loss_adjust = (log(2) - log(self.num_bins)) * self.seq_len
+        # Compute loss adjustment coming from binning and continuous domains
+        # This ensures all models begin training with loss at same scale
+        if self.embed_spec is not None and embed_domain == unit_interval:
+            # Expand unit interval to have effective width of 2
+            self.loss_adjust = log(2) * self.seq_len
         else:
-            self.loss_adjust = -log(2) * self.seq_len
+            assert self.num_bins is not None
+            self.loss_adjust = (log(2) - log(self.num_bins)) * self.seq_len
 
         # Initialize model
         self.model = ProbMPS(
             self.seq_len,
             self.input_dim,
             self.bond_dim,
+            init_method=self.core_init_spec,
             complex_params=self.complex_params,
             use_bias=self.use_bias,
-            # embed_fun=embedding,
-            # domain=embDomain,
+            embed_fun=embed_fun,
+            domain=embed_domain,
         )
         self.model.to(device)
 
@@ -214,9 +238,14 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             ):
                 step_time = time()
                 optimizer.zero_grad()
-                loss = self.model.loss(
-                    *batch, slim_eval=self.slim_eval, parallel_eval=self.parallel_eval
-                ) + self.loss_adjust
+                loss = (
+                    self.model.loss(
+                        *batch,
+                        slim_eval=self.slim_eval,
+                        parallel_eval=self.parallel_eval,
+                    )
+                    + self.loss_adjust
+                )
                 train_loss += loss.detach()
 
                 loss.backward()
@@ -232,7 +261,8 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             return train_loss
 
         now = time()
-        cprint(f"\n\nInitialization time: {now - start_time:.2f}s")
+        cprint(f"\n\nExperiment: {exp_name}")
+        cprint(f"Initialization time: {now - start_time:.2f}s")
         cprint("Starting training...\n")
 
         # Run the actual training loop
@@ -295,7 +325,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
         # Save model to disk if desired
         if self.save_model:
-            torch.save(self.model_dir + exp_name + ".model")
+            torch.save(self.model, self.model_dir + exp_name + ".model")
 
         return self
 
@@ -315,9 +345,14 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             start=1,
         ):
             with torch.no_grad():
-                loss = self.model.loss(
-                    *batch, slim_eval=self.slim_eval, parallel_eval=self.parallel_eval
-                ) + self.loss_adjust
+                loss = (
+                    self.model.loss(
+                        *batch,
+                        slim_eval=self.slim_eval,
+                        parallel_eval=self.parallel_eval,
+                    )
+                    + self.loss_adjust
+                )
             val_loss += loss.detach()
             cprint(f"    Batch {num}", end="\r")
 
@@ -509,44 +544,6 @@ def getTrainTest(trainX, testX, pool=False, discrete=True, d=2):
     return trainX, testX
 
 
-def discreteEmbedding(input):
-    input = input.cpu()
-    d1 = torch.tensor(np.ones(input.shape) * (input.numpy() > 0.2))
-    d2 = torch.tensor(np.ones(input.shape) * (input.numpy() < 0.2))
-    ret = torch.stack([d1, d2], dim=-1)
-    return ret.float()
-
-
-# discreteDomain = DataDomain(False, 2)
-
-
-def sincosEmbedding(input):
-    input = input.cpu()
-    d1 = np.cos(input * np.pi / 2)
-    d2 = np.sin(input * np.pi / 2)
-    ret = torch.stack([d1, d2], dim=-1)
-    return ret.float()
-
-
-# sincosDomain = DataDomain(True, 1, 0)
-
-
-def embeddingFunc(vect, s, d):
-    emb = np.cos(vect * np.pi / 2) ** (d - s) * np.sin(vect * np.pi / 2) ** (s - 1)
-    # cprint(emb.shape, vect.shape)
-    return emb
-
-
-def embedding(data, d):
-
-    newEmbed = np.zeros([len(data), len(data[0]), d])
-    for s in range(d):
-        # cprint(newEmbed[:,:, s].shape)
-        newEmbed[:, :, s] = embeddingFunc(data.cpu(), s + 1, d)
-
-    return newEmbed
-
-
 # utilitary function for the sampling
 def roll(bias):
 
@@ -567,7 +564,7 @@ def roll(bias):
 #     hyper_params["bond_dim"],
 #     hyper_params["batch_size"],
 #     sincosEmbedding,
-#     sincosDomain,
+#     unit_interval,
 #     lr=hyper_params["lr_init"],
 # )
 
