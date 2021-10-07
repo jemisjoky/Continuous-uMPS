@@ -2,48 +2,8 @@ from itertools import product
 
 from estimator import ProbMPS_Estimator
 
-default_config = {
-    "input_dim": 2,
-    "bond_dim": 10,
-    "complex_params": False,
-    "use_bias": False,
-    "embed_spec": None,
-    "domain_spec": None,
-    "num_bins": 2,
-    "dataset": "mnist",
-    "dataset_dir": "./datasets/",
-    "apply_downscale": True,
-    "downscale_shape": (14, 14),
-    "comet_log": True,
-    "comet_args": {},
-    "project_name": "",
-    "core_init_spec": "near_eye",
-    "optimizer": "Adam",
-    "weight_decay": 0.0001,
-    "momentum": 0.0,
-    "constant_lr": False,
-    "learning_rate_init": 0.001,
-    "learning_rate_final": 1e-6,
-    "early_stopping": False,
-    "factor": 0.1,
-    "patience": 1,
-    "cooldown": 0,
-    "slim_eval": True,
-    "parallel_eval": False,
-    "max_calls": 30000,
-    "batch_size": 100,
-    "num_train": 10000,
-    "num_test": 5000,
-    "num_val": 5000,
-    "shuffle": True,
-    "verbose": True,
-    "save_model": False,
-    "model_dir": "./models/",
-    "seed": 0,
-}
-
 # Define the collection of experiments to run
-first_run = default_config.copy()
+first_run = {}
 first_run.update(
     # # Debug settings
     # {
@@ -63,25 +23,28 @@ first_run.update(
     {
         "project_name": "continuous_fashion_v1",
         "dataset": "fashion_mnist",
-        # "num_bins": 2,
         "bond_dim": 10,
         "max_calls": 50000,
         "num_train": 10000,
         "num_val": 5000,
         "num_test": 5000,
-        "comet_log": True,
+        "comet_log": False,
         "early_stopping": True,
         "patience": 0,
         "cooldown": 1,
+        "save_model": True,
         "embed_spec": "trig",
         "core_init_spec": "normal",
     }
 )
 exp_list = []
-bin_list = [2, 3, 4, 5, 10]
-for dataset, embed_spec, num_bins in product(
-    ["mnist", "fashion_mnist"], [None, "trig"], bin_list
-):
+bin_list = [2]
+embed_list = [None]
+dataset_list = ["mnist"]
+# bin_list = [2, 3, 4, 5, 10]
+# embed_list = [None, "trig"]
+# dataset_list = ["mnist", "fashion_mnist"]
+for dataset, embed_spec, num_bins in product(dataset_list, embed_list, bin_list):
     next_run = first_run.copy()
     next_run["dataset"] = dataset
     next_run["embed_spec"] = embed_spec
@@ -92,7 +55,6 @@ for dataset, embed_spec, num_bins in product(
     exp_list.append(next_run)
 
 # Run the experiments
-assert all(set(d.keys()).issubset(default_config.keys()) for d in exp_list)
 for exp_dict in exp_list:
     estimator = ProbMPS_Estimator(**exp_dict)
     estimator.fit()

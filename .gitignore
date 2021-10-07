@@ -7,4 +7,4 @@ models/
 # Comet key
 .comet.config
 
-__pycache__
+*/__pycache__
