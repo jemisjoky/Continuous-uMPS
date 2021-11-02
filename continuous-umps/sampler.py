@@ -3,6 +3,96 @@ from math import sqrt
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from opt_einsum import contract as einsum
+
+def sample(cores, edge_vecs, num_samples=1, embed_obj=None, generator=None):
+    """
+    Produce continuous or discrete samples from an MPS Born machine
+
+    Args:
+        cores: Collection of n core tensors, for n the number of pixels in the
+            input to the MPS.
+        edge_vecs: Pair of vectors giving the left and right boundary
+            conditions of the MPS.
+        num_samples: Number of samples to generate in parallel.
+        embed_obj: Embedding object of type `torchmps.FixedEmbedding` which
+            gives all needed info about (continuous or discrete) embedding.
+        generator: Pytorch Generator object used to set randomness in sampling.
+    """
+    num_inputs = len(cores)
+    input_dim = cores[0].shape[0]
+    assert len(edge_vecs) == 2
+    left_vec, right_vec = edge_vecs
+
+    # Get right PSD matrices resulting from tracing over right cores of MPS
+    right_mats = right_trace_mats(cores, right_vec)
+    assert len(right_mats) == len(cores)
+
+    # Precompute cumulative embedding mats for non-trivial embedding
+    if embed_obj is not None:
+        domain = embed_obj.domain
+        continuous = domain.continuous
+        embed_fun = embed_obj.embed
+
+        if continuous:
+            num_points = embed_obj.num_points
+            points = torch.linspace(
+                domain.min_val, domain.max_val, steps=embed_obj.num_points
+            )
+            dx = (domain.max_val - domain.min_val) / (embed_obj.num_points - 1)
+            emb_vecs = embed_fun(points)
+            assert emb_vecs.shape[1] == input_dim
+
+            # Get rank-1 matrices for each point, then numerically integrate
+            emb_mats = einsum("bi,bj->bij", emb_vecs, emb_vecs.conj())
+            int_mats = torch.cumsum(emb_mats, dim=0) * dx
+        
+        else:
+            points = torch.arange(domain.max_val).long()
+            emb_vecs = embed_fun(points)
+            assert emb_vecs.shape[1] == input_dim
+
+            # Get rank-1 matrices for each point, then sum together
+            emb_mats = einsum("bi,bj->bij", emb_vecs, emb_vecs.conj())
+            lamb_mat = torch.sum(emb_mats, dim=0)
+
+    # Function for generating single batch of samples
+    def samp_one(core, l_mat, r_mat):
+        pass
+
+    # Initialize conditional left PSD matrix and start sampling
+    samples = []
+    l_mat = left_vec[:, None] @ left_vec[None].conj()
+    for core, r_mat in zip(cores, right_mats):
+        samps, l_mat = samp_one(core, l_mat, r_mat)
+        samples.append(samps)
+
+
+def right_trace_mats(tensor_cores, right_vec):
+    """
+    Generate virtual PSD matrices from tracing over right cores of MPS
+
+    Args:
+        tensor_cores: Collection of n core tensors, for n the number of pixels
+            in the input to the MPS.
+        right_vec: The vector giving the right boundary condition of the MPS.
+
+    Returns:
+        right_mats: Collection of n PSD matrices, ordered from left to right.
+    """
+    uniform_input = hasattr(cores, "shape")
+    assert not uniform_input or cores.ndim == 4
+
+    # Build up right matrices iteratively, from right to left
+    r_mat = right_vec[:, None] @ right_vec[None].conj()
+    right_mats = [r_mat]
+    for core in tensor_cores[-1:0:-1]:
+        r_mat = einsum("ilr,ims,rs->lm", core, core.conj(), r_mat)
+        right_mats.append(r_mat)
+
+    if uniform_input:
+        right_mats = torch.stack(right_mats)
+    return right_mats
 
 
 # performs a contraction of a tensor train with given input values
@@ -154,4 +244,6 @@ def roll(bias):
             S += val
 
 
-test_sampler("bd10_nb2_nt10k_gs.model")
+
+if __name__ == "__main__":
+    examp_model = "models/bd10_nb2_nt10k_gs.model"
