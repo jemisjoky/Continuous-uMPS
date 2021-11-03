@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from opt_einsum import contract as einsum
 
+
+@torch.no_grad()
 def sample(cores, edge_vecs, num_samples=1, embed_obj=None, generator=None):
     """
     Produce continuous or discrete samples from an MPS Born machine
@@ -18,6 +20,11 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None, generator=None):
         embed_obj: Embedding object of type `torchmps.FixedEmbedding` which
             gives all needed info about (continuous or discrete) embedding.
         generator: Pytorch Generator object used to set randomness in sampling.
+
+    Returns:
+        samples: Tensor of shape (num_samples, n) containing the sample values.
+            These will be nonnegative integers, or floats if the parent MPS is
+            using an embedding of a continuous domain.
     """
     num_inputs = len(cores)
     input_dim = cores[0].shape[0]
@@ -46,26 +53,70 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None, generator=None):
             # Get rank-1 matrices for each point, then numerically integrate
             emb_mats = einsum("bi,bj->bij", emb_vecs, emb_vecs.conj())
             int_mats = torch.cumsum(emb_mats, dim=0) * dx
-        
+
         else:
-            points = torch.arange(domain.max_val).long()
+            num_points = domain.max_val
+            points = torch.arange(num_points).long()
             emb_vecs = embed_fun(points)
             assert emb_vecs.shape[1] == input_dim
 
             # Get rank-1 matrices for each point, then sum together
             emb_mats = einsum("bi,bj->bij", emb_vecs, emb_vecs.conj())
-            lamb_mat = torch.sum(emb_mats, dim=0)
+            int_mats = torch.cumsum(emb_mats, dim=0)
+    else:
+        continuous = False
+        num_points = input_dim
+        int_mats = None
 
-    # Function for generating single batch of samples
-    def samp_one(core, l_mat, r_mat):
-        pass
-
-    # Initialize conditional left PSD matrix and start sampling
+    # Initialize conditional left PSD matrix and generate samples sequentially
     samples = []
-    l_mat = left_vec[:, None] @ left_vec[None].conj()
+    l_mats = (left_vec[:, None] @ left_vec[None].conj())[None]
     for core, r_mat in zip(cores, right_mats):
-        samps, l_mat = samp_one(core, l_mat, r_mat)
+        samps, l_mats = _sample_step(
+            core, l_mats, r_mat, embed_obj, int_mats, num_samples, generator
+        )
         samples.append(samps)
+    samples = torch.stack(samples, dim=1)
+
+    # If needed, convert integer sample outcomes into continuous values
+    if continuous:
+        samples = points[samples]
+
+    return samples
+
+
+def _sample_step(core, l_mats, r_mat, embed_obj, int_mats, num_samples, generator):
+    """
+    Function for generating single batch of samples
+    """
+    # Get unnormalized probabilities and normalize
+    if embed_obj is not None:
+        probs = einsum(
+            "blm,ilr,uij,jms,rs->bu", l_mats, core, int_mats, core.conj(), r_mat
+        )
+    else:
+        probs = einsum("blm,ilr,ims,rs->bi", l_mats, core, core.conj(), r_mat)
+    if probs.is_complex():
+        probs = probs.real
+    probs /= probs.sum(dim=1, keepdim=True)
+    int_probs = torch.cumsum(probs, axis=1)
+    assert torch.all(probs > 0)
+    assert torch.allclose(int_probs[:, -1], torch.ones(1))
+
+    # Sample from int_probs (argmax finds first int_p with int_p > rand_val)
+    rand_vals = torch.rand((num_samples, 1), generator=generator)
+    samp_ints = torch.argmax((int_probs > rand_vals).long(), dim=1)
+    assert False  # TODO: Finish from here
+    samp_mats = core[:, :, samp_ints]
+
+    # Conditionally evolve to get new left densities
+    new_densities = np.einsum(
+        "acB,Bab,bdB->Bcd", np.conj(samp_mats), l_densities, samp_mats
+    )
+    norms = np.trace(new_densities, axis1=1, axis2=2)[:, None, None]
+    new_densities = new_densities / norms
+
+    return samps, l_mats
 
 
 def right_trace_mats(tensor_cores, right_vec):
@@ -92,6 +143,7 @@ def right_trace_mats(tensor_cores, right_vec):
 
     if uniform_input:
         right_mats = torch.stack(right_mats)
+
     return right_mats
 
 
@@ -242,7 +294,6 @@ def roll(bias):
             return i
         else:
             S += val
-
 
 
 if __name__ == "__main__":
