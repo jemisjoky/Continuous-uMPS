@@ -21,14 +21,12 @@ first_run.update(
     # }
     # Real settings
     {
-        "project_name": "continuous_fashion_v1",
-        "dataset": "fashion_mnist",
         "bond_dim": 10,
         "max_calls": 50000,
         "num_train": 10000,
         "num_val": 5000,
         "num_test": 5000,
-        "comet_log": False,
+        "comet_log": True,
         "early_stopping": True,
         "patience": 0,
         "cooldown": 1,
@@ -39,7 +37,7 @@ first_run.update(
 )
 exp_list = []
 bin_list = [2]
-embed_list = [None]
+embed_list = [None, "trig"]
 dataset_list = ["mnist"]
 # bin_list = [2, 3, 4, 5, 10]
 # embed_list = [None, "trig"]
