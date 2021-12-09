@@ -38,7 +38,7 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None, generator=None):
     if embed_obj is not None:
         domain = embed_obj.domain
         continuous = domain.continuous
-        embed_fun = embed_obj.embed
+        embed_fun = embed_obj.__call__
 
         if continuous:
             num_points = embed_obj.num_points
@@ -87,7 +87,9 @@ def sample(cores, edge_vecs, num_samples=1, embed_obj=None, generator=None):
     return samples
 
 
-def _sample_step(core, l_vecs, r_mat, embed_obj, int_mats, num_samples, points, generator):
+def _sample_step(
+    core, l_vecs, r_mat, embed_obj, int_mats, num_samples, points, generator
+):
     """
     Function for generating single batch of samples
     """
@@ -126,7 +128,7 @@ def _sample_step(core, l_vecs, r_mat, embed_obj, int_mats, num_samples, points, 
     # Conditionally update new left boundary vectors
     if embed_obj is not None:
         samp_points = points[samp_ints]
-        emb_vecs = embed_obj.embed(samp_points)
+        emb_vecs = embed_obj(samp_points)
         l_vecs = einsum("bl,ilr,bi->br", l_vecs, core, emb_vecs)
     else:
         samp_mats = core[samp_ints]
@@ -308,7 +310,7 @@ def test_sampler(model_name, save_dir="./models/"):
         print(p / Z)
         im = seq_to_array(vals, im_len, im_len)
 
-        plt.imshow(im, cmap="gray")
+        plt.imshow(im, cmap="gray", vmin=0, vmax=1)
         plt.show()
 
 

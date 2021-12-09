@@ -10,8 +10,14 @@ from sklearn.base import BaseEstimator, DensityMixin
 import torch
 
 from torchmps import ProbMPS
-from utils import FakeLogger, null
-from torchmps.embeddings import unit_interval, trig_embed
+from .utils import FakeLogger, null
+from torchmps.embeddings import (
+    unit_interval,
+    trig_embed,
+    init_mlp_embed,
+    legendre_embed,
+    FixedEmbedding,
+)
 
 
 class ProbMPS_Estimator(BaseEstimator, DensityMixin):
@@ -20,7 +26,6 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
     Args:
         input_dim: Dimension of the MPS input indices
-        num_inputs: Number of discrete inputs to the model
         bond_dim: Bond dimension of the model
     """
 
@@ -32,6 +37,9 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         use_bias=False,
         embed_spec=None,
         domain_spec=None,
+        embed_layers=2,
+        embed_hdims=10,
+        frameify=False,
         num_bins=None,
         dataset="mnist",
         dataset_dir="./datasets/",
@@ -51,7 +59,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         factor=0.1,
         patience=1,
         cooldown=0,
-        slim_eval=False,
+        slim_eval=True,
         parallel_eval=False,
         max_calls=20000,
         batch_size=128,
@@ -70,6 +78,9 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         self.use_bias = use_bias
         self.embed_spec = embed_spec
         self.domain_spec = domain_spec
+        self.embed_layers = embed_layers
+        self.embed_hdims = embed_hdims
+        self.frameify = frameify
         self.num_bins = num_bins
         self.dataset = dataset
         self.dataset_dir = dataset_dir
@@ -113,16 +124,38 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         self.dataset = self.dataset.lower()
 
         # Initialize embedding using embed_spec and domain_spec
-        assert self.embed_spec in [None, "trig"]
+        assert self.embed_spec in [None, "trig", "leg", "nn"]
         if self.embed_spec == "trig":
             assert self.num_bins >= 2
-            embed_fun = partial(trig_embed, emb_dim=self.num_bins)
+            embed_domain = unit_interval
+            raw_embed = partial(trig_embed, emb_dim=self.num_bins)
+            embed_fun = FixedEmbedding(raw_embed, embed_domain, frameify=self.frameify)
+            self.input_dim = self.num_bins
+            continuous = True
+        elif self.embed_spec == "leg":
+            assert self.num_bins >= 2
+            embed_domain = unit_interval
+            raw_embed = partial(legendre_embed, emb_dim=self.num_bins)
+            embed_fun = FixedEmbedding(raw_embed, embed_domain, frameify=self.frameify)
+            self.input_dim = self.num_bins
+            continuous = True
+        elif self.embed_spec == "nn":
+            assert self.embed_hdims is not None
+            assert self.embed_layers is not None
+            embed_fun = init_mlp_embed(
+                self.num_bins,
+                num_layers=self.embed_layers,
+                hidden_dims=self.embed_hdims,
+                frameify=self.frameify,
+            )
             embed_domain = unit_interval
             self.input_dim = self.num_bins
+            continuous = True
         elif self.embed_spec is None:
             # If we're binning data, set the input dimension to number of bins
             embed_fun = embed_domain = None
             self.input_dim = self.num_bins
+            continuous = False
         else:
             raise NotImplementedError
 
@@ -130,10 +163,13 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         exp_name = (
             f"bd{self.bond_dim}_nb{self.num_bins}_nt{round(self.num_train / 1000)}k"
         )
-        if self.embed_spec == "sin-cos":
-            exp_name = "sc_" + exp_name
-        elif self.embed_spec == "trig":
-            exp_name = "trig_" + exp_name
+        frame_id = "f_" if self.frameify else ""
+        if self.embed_spec == "trig":
+            exp_name = "trig_" + frame_id + exp_name
+        elif self.embed_spec == "leg":
+            exp_name = "leg_" + frame_id + exp_name
+        elif self.embed_spec == "nn":
+            exp_name = f"nn{self.embed_layers}_" + frame_id + exp_name
         if self.core_init_spec == "normal":
             exp_name = exp_name + "_gs"
         elif self.core_init_spec is None:
@@ -162,7 +198,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
         # Import our dataset
         if self.dataset in ["mnist", "fashion_mnist"]:
-            from datasets import load_mnist
+            from .datasets import load_mnist
 
             fashion = self.dataset == "fashion_mnist"
             train, val, test = load_mnist(
@@ -173,6 +209,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
                 downscale=self.apply_downscale,
                 downscale_shape=self.downscale_shape,
                 num_bins=self.num_bins,
+                continuous=continuous,
                 dataset_dir=self.dataset_dir,
                 device=device,
             )
@@ -200,7 +237,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             complex_params=self.complex_params,
             use_bias=self.use_bias,
             embed_fun=embed_fun,
-            domain=embed_domain,
+            # domain=embed_domain,
         )
         self.model.to(device)
 

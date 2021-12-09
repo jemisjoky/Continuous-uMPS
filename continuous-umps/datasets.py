@@ -12,6 +12,7 @@ def load_mnist(
     downscale=False,
     downscale_shape=None,
     num_bins=None,
+    continuous=True,
     dataset_dir=None,
     device=None,
 ):
@@ -55,7 +56,7 @@ def load_mnist(
         out = tuple(ds.to(device) for ds in out)
 
     # Finally, discretize images and put in pytorch Dataset
-    if num_bins is not None:
+    if num_bins is not None and not continuous:
         out = tuple(bin_data(ds, num_bins) for ds in out)
     return tuple(torch.utils.data.TensorDataset(ds) for ds in out)
 
