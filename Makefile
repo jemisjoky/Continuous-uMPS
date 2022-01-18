@@ -12,4 +12,4 @@ test:
 
 .PHONY: train
 train:
-	python3 ./continuous-umps/train_scripts.py
+	python3 -m continuous-umps.train_scripts

@@ -27,6 +27,9 @@ def load_mnist(
     if num_val is not None and num_val + num_train > 60000:
         num_train = 60000 - num_val
 
+    if dataset_dir is None:
+        dataset_dir = "./datasets/"
+
     if fashion:
         dataset = torchvision.datasets.FashionMNIST
         dset_dir = dataset_dir + "fashion_mnist/"

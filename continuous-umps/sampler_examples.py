@@ -7,8 +7,8 @@ from .sampler import sample, test_sampler
 def print_pretrained_samples():
     num_bins = 10
     num_samps = 5
-    model_name = f"bd100_nb{num_bins}_nt10k_gs.model"
-    # model_name = f"leg_bd100_nb{num_bins}_nt10k_gs.model"
+    # model_name = f"bd100_nb{num_bins}_nt10k_gs.model"
+    model_name = f"leg_bd10_nb{num_bins}_nt10k_gs.model"
     # model_name = f"trig_bd10_nb{num_bins}_nt10k_gs.model"
     mps = torch.load(f"models/{model_name}")
 

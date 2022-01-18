@@ -161,7 +161,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
         # Build experiment name
         exp_name = (
-            f"bd{self.bond_dim}_nb{self.num_bins}_nt{round(self.num_train / 1000)}k"
+            f"nb{self.num_bins}_bd{self.bond_dim}_nt{round(self.num_train / 1000)}k"
         )
         frame_id = "f_" if self.frameify else ""
         if self.embed_spec == "trig":
