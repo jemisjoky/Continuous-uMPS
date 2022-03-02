@@ -59,12 +59,15 @@ if __name__ == "__main__":
     covariance_mat = make_covariance_mat()
     if BISTOCHASTIC:
         from sinkhorn_knopp import sinkhorn_knopp
+
         sk = sinkhorn_knopp.SinkhornKnopp()
         covariance_mat = sk.fit(covariance_mat.numpy())
         covariance_mat = torch.tensor(covariance_mat)
 
     # Plot covariance matrix
-    plot_title = f"{EMBEDDING_SPEC.title()} Grayscale-Grayscale Covariance, d={EMBEDDING_DIM}"
+    plot_title = (
+        f"{EMBEDDING_SPEC.title()} Grayscale-Grayscale Covariance, d={EMBEDDING_DIM}"
+    )
     plt.imshow(covariance_mat, extent=[0, 1, 0, 1])
     plt.title(plot_title)
     plt.colorbar()
@@ -80,5 +83,3 @@ if __name__ == "__main__":
     plt.ylim(0, max_y)
     plt.title(plot_title)
     plt.show()
-
-    

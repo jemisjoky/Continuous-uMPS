@@ -49,7 +49,9 @@ for dataset, embed_spec, num_bins in product(dataset_list, embed_list, bin_list)
     next_run["embed_spec"] = embed_spec
     next_run["num_bins"] = num_bins
     next_run["project_name"] = (
-        "continuous_fashion_test" if dataset == "fashion_mnist" else "continuous_mnist_v2"
+        "continuous_fashion_test"
+        if dataset == "fashion_mnist"
+        else "continuous_mnist_v2"
     )
     # Run frameified and unframeified versions
     for frameify in [False, True]:

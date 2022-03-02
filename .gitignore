@@ -7,4 +7,7 @@ models/
 # Comet key
 .comet.config
 
+# Han et al. code
+UnsupGenModbyMPS/
+
 */__pycache__

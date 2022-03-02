@@ -47,6 +47,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         downscale_shape=(14, 14),
         comet_log=False,
         comet_args={},
+        exp_name="",
         project_name="",
         core_init_spec="normal",
         optimizer="Adam",
@@ -56,9 +57,11 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         learning_rate_init=0.001,
         learning_rate_final=1e-6,
         early_stopping=False,
+        manual_schedule=None,
         factor=0.1,
         patience=1,
         cooldown=0,
+        canonicalize=False,
         slim_eval=True,
         parallel_eval=False,
         max_calls=20000,
@@ -88,6 +91,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         self.downscale_shape = downscale_shape
         self.comet_log = comet_log
         self.comet_args = comet_args
+        self.exp_name = exp_name
         self.project_name = project_name
         self.core_init_spec = core_init_spec
         self.optimizer = optimizer
@@ -97,9 +101,11 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         self.learning_rate_init = learning_rate_init
         self.learning_rate_final = learning_rate_final
         self.early_stopping = early_stopping
+        self.manual_schedule = manual_schedule
         self.factor = factor
         self.patience = patience
         self.cooldown = cooldown
+        self.canonicalize = canonicalize
         self.slim_eval = slim_eval
         self.parallel_eval = parallel_eval
         self.max_calls = max_calls
@@ -160,20 +166,25 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             raise NotImplementedError
 
         # Build experiment name
-        exp_name = (
-            f"nb{self.num_bins}_bd{self.bond_dim}_nt{round(self.num_train / 1000)}k"
-        )
-        frame_id = "f_" if self.frameify else ""
-        if self.embed_spec == "trig":
-            exp_name = "trig_" + frame_id + exp_name
-        elif self.embed_spec == "leg":
-            exp_name = "leg_" + frame_id + exp_name
-        elif self.embed_spec == "nn":
-            exp_name = f"nn{self.embed_layers}_" + frame_id + exp_name
-        if self.core_init_spec == "normal":
-            exp_name = exp_name + "_gs"
-        elif self.core_init_spec is None:
-            exp_name = exp_name + "_eye"
+        if self.exp_name is None:
+            exp_name = (
+                f"nb{self.num_bins}_bd{self.bond_dim}_nt{round(self.num_train / 1000)}k"
+            )
+            frame_id = "f_" if self.frameify else ""
+            if self.embed_spec == "trig":
+                exp_name = "trig_" + frame_id + exp_name
+            elif self.embed_spec == "leg":
+                exp_name = "leg_" + frame_id + exp_name
+            elif self.embed_spec == "nn":
+                exp_name = f"nn{self.embed_layers}_" + frame_id + exp_name
+            if self.core_init_spec == "normal":
+                exp_name = exp_name + "_gs"
+            elif self.core_init_spec == "normal_can":
+                exp_name = exp_name + "_gsC"
+            elif self.core_init_spec is None:
+                exp_name = exp_name + "_eye"
+            self.exp_name = exp_name
+        assert isinstance(self.exp_name, str)
 
         # Initialize Comet data logging
         if self.comet_log:
@@ -182,7 +193,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
                 raise ValueError("Must specify experiment name to use comet logging")
             logger = Experiment(project_name=self.project_name)
             logger.log_parameters(self.__dict__)
-            logger.set_name(exp_name)
+            logger.set_name(self.exp_name)
         else:
             logger = FakeLogger()
 
@@ -195,6 +206,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
         train_g.manual_seed(self.seed)
         self.val_g = torch.Generator(device=device)
         self.val_g.manual_seed(self.seed)
+        torch.manual_seed(self.seed)
 
         # Import our dataset
         if self.dataset in ["mnist", "fashion_mnist"]:
@@ -256,6 +268,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
             self.cooldown,
             self.max_epochs,
             self.verbose,
+            self.manual_schedule,
         )
 
         def optimize_one_epoch():
@@ -292,12 +305,16 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
                 )
                 cprint(f"    Batch {num}: {loss:.2f}", end="\r")
 
+            # Put MPS parameters in canonical form
+            if self.canonicalize:
+                self.model.canonicalize()
+
             # Return average loss
             train_loss /= num
             return train_loss
 
         now = time()
-        cprint(f"\n\nExperiment: {exp_name}")
+        cprint(f"\n\nExperiment: {self.exp_name}")
         cprint(f"Initialization time: {now - start_time:.2f}s")
         cprint("Starting training...\n")
 
@@ -361,7 +378,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
 
         # Save model to disk if desired
         if self.save_model:
-            torch.save(self.model, self.model_dir + exp_name + ".model")
+            torch.save(self.model, self.model_dir + self.exp_name + ".model")
 
         return self
 
@@ -389,7 +406,7 @@ class ProbMPS_Estimator(BaseEstimator, DensityMixin):
                     )
                     + self.loss_adjust
                 )
-            val_loss += loss.detach()
+                val_loss += loss.detach()
             cprint(f"    Batch {num}", end="\r")
 
         # Return average loss, negative to fit with sklearn convention
@@ -419,11 +436,12 @@ def setup_opt_sched(
     cooldown,
     max_epochs,
     verbose,
+    manual_schedule,
 ):
     assert hasattr(torch.optim, optimizer)
 
     # Define optimizer
-    if optimizer in ["Adam", "AdamW", "Adamax", "Adadelta", "Adagrad"]:
+    if optimizer in ["Adam", "AdamW", "Adamax", "Adadelta", "Adagrad", "ASGD"]:
         opt = getattr(torch.optim, optimizer)(
             parameters, lr=learning_rate_init, weight_decay=weight_decay
         )
@@ -437,39 +455,49 @@ def setup_opt_sched(
     else:
         raise NotImplementedError
 
-    # Define (tweaked) scheduler, whose step method outputs early stopping info
-    if constant_lr:
-        factor = 1.0
-        max_reductions = float("inf")
-    else:
-        max_reductions = ceil(
-            log(learning_rate_final / learning_rate_init) / log(factor)
+    # Define custom plateau schedule
+    if manual_schedule is not None:
+        assert hasattr(manual_schedule, "__len__")
+        assert all(isinstance(ep, int) for ep in manual_schedule)
+
+        sched = torch.optim.lr_scheduler.MultiStepLR(
+            opt, gamma=factor, milestones=manual_schedule
         )
-    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, factor=factor, patience=patience, cooldown=cooldown, verbose=verbose
-    )
-    sched.num_reductions = 0
-    sched.__reduce_lr = sched._reduce_lr
-    sched._step = sched.step
 
-    def custom_reduce_lr(self, epoch):
-        self.num_reductions += 1
-        self.__reduce_lr(epoch)
+    # Define (tweaked) scheduler, whose step method outputs early stopping info
+    else:
+        if constant_lr:
+            factor = 1.0
+            max_reductions = float("inf")
+        else:
+            max_reductions = ceil(
+                log(learning_rate_final / learning_rate_init) / log(factor)
+            )
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            opt, factor=factor, patience=patience, cooldown=cooldown, verbose=verbose
+        )
+        sched.num_reductions = 0
+        sched.__reduce_lr = sched._reduce_lr
+        sched._step = sched.step
 
-    def custom_step(self, metrics, epoch=None):
-        num_red = self.num_reductions
-        self._step(metrics, epoch=epoch)
-        if early_stopping and self.num_reductions >= (
-            1 if constant_lr else max_reductions
-        ):
-            return True
-        if not constant_lr and self.num_reductions > num_red:
-            cprint("### Decreasing LR ###")
-        if not early_stopping:
+        def custom_reduce_lr(self, epoch):
+            self.num_reductions += 1
+            self.__reduce_lr(epoch)
+
+        def custom_step(self, metrics, epoch=None):
+            num_red = self.num_reductions
+            self._step(metrics, epoch=epoch)
+            if early_stopping and self.num_reductions >= (
+                1 if constant_lr else max_reductions
+            ):
+                return True
+            if not constant_lr and self.num_reductions > num_red:
+                cprint("### Decreasing LR ###")
+            if not early_stopping:
+                return False
             return False
-        return False
 
-    sched.step = MethodType(custom_step, sched)
-    sched._reduce_lr = MethodType(custom_reduce_lr, sched)
+        sched.step = MethodType(custom_step, sched)
+        sched._reduce_lr = MethodType(custom_reduce_lr, sched)
 
     return opt, sched

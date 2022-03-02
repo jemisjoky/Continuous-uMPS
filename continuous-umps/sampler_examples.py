@@ -1,3 +1,5 @@
+from math import sqrt
+
 import torch
 import matplotlib.pyplot as plt
 
@@ -5,11 +7,14 @@ from .sampler import sample, test_sampler
 
 
 def print_pretrained_samples():
-    num_bins = 10
+    num_bins = 2
     num_samps = 5
+    bond_dim = 30
     # model_name = f"bd100_nb{num_bins}_nt10k_gs.model"
-    model_name = f"leg_bd10_nb{num_bins}_nt10k_gs.model"
+    # model_name = f"leg_bd10_nb{num_bins}_nt10k_gs.model"
     # model_name = f"trig_bd10_nb{num_bins}_nt10k_gs.model"
+    model_name = f"bd{bond_dim}_gs_adam_E3.0.model"
+    # model_name = f"bd8_gs.model"
     mps = torch.load(f"models/{model_name}")
 
     samples = sample(
@@ -17,7 +22,8 @@ def print_pretrained_samples():
     )
 
     # Reshape and rescale sampled values
-    samples = samples.reshape(num_samps, 14, 14)
+    width = round(sqrt(mps.core_tensors.shape[0]))
+    samples = samples.reshape(num_samps, width, width)
     assert torch.all(samples >= 0)
     if torch.any(samples >= 2):
         samples = samples.float() / samples.max()
@@ -27,7 +33,7 @@ def print_pretrained_samples():
     for image in samples:
         if unseen:
             unseen = False
-            print(image)
+            # print(image)
         plt.imshow(image, cmap="gray_r", vmin=0, vmax=1)
         plt.show()
 
